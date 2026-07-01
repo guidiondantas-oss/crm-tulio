@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { DEFAULT_SETTINGS } from './data'
 import type { DatabaseLead, DatabaseSettings, Lead, LeadInsert, Settings } from './types'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
@@ -10,6 +11,18 @@ export const supabase = hasSupabaseConfig
   ? createClient(supabaseUrl!, supabaseAnonKey!)
   : null
 
+const normalizeStage = (lead: DatabaseLead) => {
+  if (lead.stage === 'Contrato Assinado') return 'Protocolo Iniciado'
+  if (lead.stage === 'Pasta Completa') return 'Documentação Concluída'
+  if (lead.stage === 'Revisão Advogado') return 'Montagem de Processo'
+  return lead.stage
+}
+
+const normalizeStatus = (lead: DatabaseLead) => {
+  if (lead.status) return lead.status
+  return lead.stage === 'Contrato Assinado' ? 'Contrato Assinado' : 'Ativo'
+}
+
 const mapLeadFromDatabase = (lead: DatabaseLead): Lead => ({
   id: lead.id,
   name: lead.name,
@@ -17,13 +30,16 @@ const mapLeadFromDatabase = (lead: DatabaseLead): Lead => ({
   email: lead.email || '',
   area: lead.legal_area,
   origin: lead.origin,
-  stage: lead.stage,
+  stage: normalizeStage(lead),
   ticket: lead.estimated_ticket || 0,
   owner: lead.owner,
   days: lead.days_in_funnel || 0,
   notes: lead.notes || '',
+  status: normalizeStatus(lead),
   activity: lead.activity || [],
   createdAt: lead.created_at,
+  closedAt: lead.closed_at,
+  stageChangedAt: lead.stage_changed_at || lead.created_at,
 })
 
 const mapLeadToDatabase = (lead: LeadInsert) => ({
@@ -37,7 +53,10 @@ const mapLeadToDatabase = (lead: LeadInsert) => ({
   owner: lead.owner,
   days_in_funnel: lead.days,
   notes: lead.notes,
+  status: lead.status,
   activity: lead.activity,
+  closed_at: lead.closedAt || null,
+  stage_changed_at: lead.stageChangedAt || null,
 })
 
 const mapSettingsFromDatabase = (settings: DatabaseSettings): Settings => ({
@@ -46,6 +65,12 @@ const mapSettingsFromDatabase = (settings: DatabaseSettings): Settings => ({
   monthlyProtocolGoal: settings.monthly_protocol_goal,
   minimumTicket: settings.minimum_ticket,
   conversionGoal: settings.conversion_goal,
+  firstContactReturnDays: settings.first_contact_return_days ?? 1,
+  secondContactReturnDays: settings.second_contact_return_days ?? 2,
+  thirdContactReturnDays: settings.third_contact_return_days ?? 3,
+  originOptions: settings.origin_options?.length ? settings.origin_options : DEFAULT_SETTINGS.originOptions,
+  legalAreaOptions: settings.legal_area_options?.length ? settings.legal_area_options : DEFAULT_SETTINGS.legalAreaOptions,
+  ownerOptions: settings.owner_options?.length ? settings.owner_options : DEFAULT_SETTINGS.ownerOptions,
 })
 
 export async function fetchLeads() {
@@ -73,15 +98,12 @@ export async function createLead(lead: LeadInsert) {
   return mapLeadFromDatabase(data as DatabaseLead)
 }
 
-export async function updateLeadStage(lead: Lead) {
+export async function updateLeadRecord(lead: Lead) {
   if (!supabase) return null
 
   const { data, error } = await supabase
     .from('leads')
-    .update({
-      stage: lead.stage,
-      activity: lead.activity,
-    })
+    .update(mapLeadToDatabase(lead))
     .eq('id', lead.id)
     .select('*')
     .single()
@@ -90,10 +112,42 @@ export async function updateLeadStage(lead: Lead) {
   return mapLeadFromDatabase(data as DatabaseLead)
 }
 
-export async function removeLead(id: string) {
+export async function getCurrentSession() {
+  if (!supabase) return null
+
+  const { data, error } = await supabase.auth.getSession()
+  if (error) throw error
+  return data.session
+}
+
+export function getSessionUserLabel(session: Awaited<ReturnType<typeof getCurrentSession>>) {
+  const metadata = session?.user?.user_metadata as Record<string, unknown> | undefined
+  const metadataName = metadata?.name || metadata?.full_name
+  return String(metadataName || session?.user?.email || '').trim()
+}
+
+export function onAuthStateChanged(callback: (isAuthenticated: boolean, userLabel?: string) => void) {
+  if (!supabase) return () => undefined
+
+  const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+    callback(Boolean(session), getSessionUserLabel(session))
+  })
+
+  return () => data.subscription.unsubscribe()
+}
+
+export async function signInWithEmail(email: string, password: string) {
+  if (!supabase) return null
+
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+  if (error) throw error
+  return data.session
+}
+
+export async function signOutUser() {
   if (!supabase) return
 
-  const { error } = await supabase.from('leads').delete().eq('id', id)
+  const { error } = await supabase.auth.signOut()
   if (error) throw error
 }
 
@@ -122,6 +176,12 @@ export async function saveSettings(settings: Settings) {
       monthly_protocol_goal: settings.monthlyProtocolGoal,
       minimum_ticket: settings.minimumTicket,
       conversion_goal: settings.conversionGoal,
+      first_contact_return_days: settings.firstContactReturnDays,
+      second_contact_return_days: settings.secondContactReturnDays,
+      third_contact_return_days: settings.thirdContactReturnDays,
+      origin_options: settings.originOptions.map((option) => option.trim()).filter(Boolean),
+      legal_area_options: settings.legalAreaOptions.map((option) => option.trim()).filter(Boolean),
+      owner_options: settings.ownerOptions.map((option) => option.trim()).filter(Boolean),
     })
     .select('*')
     .single()
