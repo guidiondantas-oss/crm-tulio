@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import './App.css'
-import { DEFAULT_SETTINGS, SAMPLE_LEADS, STAGE_CLASS, STAGES } from './data'
+import { DEFAULT_SETTINGS, STAGE_CLASS, STAGES } from './data'
 import {
   createLead,
   fetchLeads,
   fetchSettings,
   getCurrentSession,
   getSessionUserLabel,
+  getSessionUserRole,
   hasSupabaseConfig,
   onAuthStateChanged,
   saveSettings,
@@ -168,7 +169,7 @@ function countCurrentMonthProtocols(leads: Lead[]) {
 
 function App() {
   const [activePage, setActivePage] = useState<Page>('dashboard')
-  const [leads, setLeads] = useState<Lead[]>(hasSupabaseConfig ? [] : SAMPLE_LEADS)
+  const [leads, setLeads] = useState<Lead[]>([])
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -188,6 +189,7 @@ function App() {
   const [areaDraft, setAreaDraft] = useState('')
   const [ownerDraft, setOwnerDraft] = useState('')
   const [currentUserName, setCurrentUserName] = useState(DEFAULT_SETTINGS.ownerName)
+  const [currentUserRole, setCurrentUserRole] = useState('')
   const [reportOwner, setReportOwner] = useState('all')
   const [reportArea, setReportArea] = useState('all')
   const [reportOrigin, setReportOrigin] = useState('all')
@@ -205,9 +207,18 @@ function App() {
       try {
         const session = await getCurrentSession()
         if (mounted) {
+          const isAdmin = getSessionUserRole(session) === 'admin'
+          if (session && !isAdmin) {
+            await signOutUser()
+            setIsAuthenticated(false)
+            setLoginError('Este usuário não tem acesso de administrador.')
+            return
+          }
+
           setIsAuthenticated(Boolean(session))
           const userLabel = getSessionUserLabel(session)
           if (userLabel) setCurrentUserName(userLabel)
+          setCurrentUserRole(getSessionUserRole(session))
         }
       } catch (error) {
         console.error('Erro ao verificar sessão:', error)
@@ -218,13 +229,22 @@ function App() {
 
     void checkSession()
 
-    const unsubscribe = onAuthStateChanged((authenticated, userLabel) => {
+    const unsubscribe = onAuthStateChanged((authenticated, userLabel, userRole) => {
+      if (authenticated && userRole !== 'admin') {
+        setIsAuthenticated(false)
+        setLoginError('Este usuário não tem acesso de administrador.')
+        void signOutUser()
+        return
+      }
+
       setIsAuthenticated(authenticated)
       if (userLabel) setCurrentUserName(userLabel)
+      setCurrentUserRole(userRole || '')
       if (!authenticated) {
-        setLeads(hasSupabaseConfig ? [] : SAMPLE_LEADS)
+        setLeads([])
         setSelectedLeadId(null)
         setCurrentUserName(DEFAULT_SETTINGS.ownerName)
+        setCurrentUserRole('')
         setDataError('')
         setIsLoadingData(false)
       }
@@ -412,15 +432,24 @@ function App() {
       return
     }
 
+    if (!hasSupabaseConfig) {
+      setLoginError('Supabase não configurado. Adicione as variáveis de ambiente para entrar.')
+      return
+    }
+
     setIsLoggingIn(true)
     try {
-      if (hasSupabaseConfig) {
-        const session = await signInWithEmail(loginForm.email.trim(), loginForm.password)
-        const userLabel = getSessionUserLabel(session)
-        setCurrentUserName(userLabel || loginForm.email.trim())
-      } else {
-        setCurrentUserName(loginForm.email.trim())
+      const session = await signInWithEmail(loginForm.email.trim(), loginForm.password)
+      const userRole = getSessionUserRole(session)
+      if (userRole !== 'admin') {
+        await signOutUser()
+        setLoginError('Este usuário não tem acesso de administrador.')
+        return
       }
+
+      const userLabel = getSessionUserLabel(session)
+      setCurrentUserName(userLabel || loginForm.email.trim())
+      setCurrentUserRole(userRole)
       setIsAuthenticated(true)
       setLoginForm({ email: '', password: '' })
     } catch (error) {
@@ -433,7 +462,7 @@ function App() {
 
   async function handleLogout() {
     try {
-      if (hasSupabaseConfig) await signOutUser()
+      await signOutUser()
     } catch (error) {
       console.error('Erro ao sair:', error)
       window.alert('Não foi possível encerrar a sessão. Tente novamente.')
@@ -443,6 +472,7 @@ function App() {
     setIsAuthenticated(false)
     setSelectedLeadId(null)
     setActivePage('dashboard')
+    setCurrentUserRole('')
   }
 
   function openModal(initialStage: Stage = '1º Contato') {
@@ -501,10 +531,7 @@ function App() {
     setIsSaving(true)
     try {
       const databaseLead = await createLead(newLead)
-      setLeads((current) => [
-        databaseLead || { ...newLead, id: `local-${Date.now()}`, createdAt: new Date().toISOString() },
-        ...current,
-      ])
+      setLeads((current) => [databaseLead, ...current])
       setIsModalOpen(false)
       setForm(emptyForm)
     } catch (error) {
@@ -615,8 +642,7 @@ function App() {
         ownerOptions,
       }
       const databaseSettings = await saveSettings(normalizedSettings)
-      if (databaseSettings) setSettings(databaseSettings)
-      else setSettings(normalizedSettings)
+      setSettings(databaseSettings)
       window.alert('Configurações salvas.')
     } catch (error) {
       console.error('Erro ao salvar configurações:', error)
@@ -650,6 +676,7 @@ function App() {
         loginForm={loginForm}
         loginError={loginError}
         isLoggingIn={isLoggingIn}
+        isAuthConfigured={hasSupabaseConfig}
         setLoginForm={setLoginForm}
         handleLogin={handleLogin}
       />
@@ -702,7 +729,7 @@ function App() {
             <div className="user-avatar">{userInitials}</div>
             <div>
               <div className="user-name">{currentUserName}</div>
-              <div className="user-role">Usuário autenticado</div>
+              <div className="user-role">{currentUserRole === 'admin' ? 'Administrador' : 'Usuário autenticado'}</div>
             </div>
           </div>
           <button className="logout-button" onClick={() => void handleLogout()}>Sair</button>
@@ -1164,14 +1191,17 @@ function App() {
   )
 }
 
-function LoginScreen({ firmName, loginForm, loginError, isLoggingIn, setLoginForm, handleLogin }: {
+function LoginScreen({ firmName, loginForm, loginError, isLoggingIn, isAuthConfigured, setLoginForm, handleLogin }: {
   firmName: string
   loginForm: { email: string, password: string }
   loginError: string
   isLoggingIn: boolean
+  isAuthConfigured: boolean
   setLoginForm: (form: { email: string, password: string }) => void
   handleLogin: (event: FormEvent) => Promise<void>
 }) {
+  const accessError = loginError || (!isAuthConfigured ? 'Supabase não configurado. Confira as variáveis da Vercel.' : '')
+
   return (
     <div className="login-shell">
       <form className="login-card" onSubmit={(event) => void handleLogin(event)}>
@@ -1186,6 +1216,7 @@ function LoginScreen({ firmName, loginForm, loginError, isLoggingIn, setLoginFor
             value={loginForm.email}
             onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })}
             placeholder="email@escritorio.com"
+            disabled={isLoggingIn || !isAuthConfigured}
           />
         </label>
         <label className="form-group">
@@ -1197,10 +1228,11 @@ function LoginScreen({ firmName, loginForm, loginError, isLoggingIn, setLoginFor
             value={loginForm.password}
             onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })}
             placeholder="Sua senha"
+            disabled={isLoggingIn || !isAuthConfigured}
           />
         </label>
-        {loginError && <div className="login-error">{loginError}</div>}
-        <button className="btn btn-gold login-button" disabled={isLoggingIn}>
+        {accessError && <div className="login-error">{accessError}</div>}
+        <button className="btn btn-gold login-button" disabled={isLoggingIn || !isAuthConfigured}>
           {isLoggingIn ? 'Entrando...' : 'Entrar'}
         </button>
       </form>

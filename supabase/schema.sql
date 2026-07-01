@@ -158,6 +158,14 @@ for each row execute function public.touch_crm_settings_updated_at();
 alter table public.leads enable row level security;
 alter table public.crm_settings enable row level security;
 
+create or replace function public.is_crm_admin()
+returns boolean
+language sql
+stable
+as $$
+  select coalesce(auth.jwt() -> 'app_metadata' ->> 'role', '') = 'admin';
+$$;
+
 drop policy if exists "Public CRM lead read" on public.leads;
 drop policy if exists "Public CRM lead insert" on public.leads;
 drop policy if exists "Public CRM lead update" on public.leads;
@@ -168,34 +176,34 @@ drop policy if exists "Public CRM settings write" on public.crm_settings;
 create policy "Public CRM lead read"
 on public.leads for select
 to authenticated
-using (true);
+using (public.is_crm_admin());
 
 create policy "Public CRM lead insert"
 on public.leads for insert
 to authenticated
-with check (true);
+with check (public.is_crm_admin());
 
 create policy "Public CRM lead update"
 on public.leads for update
 to authenticated
-using (true)
-with check (true);
+using (public.is_crm_admin())
+with check (public.is_crm_admin());
 
 create policy "Public CRM lead delete"
 on public.leads for delete
 to authenticated
-using (true);
+using (public.is_crm_admin());
 
 create policy "Public CRM settings read"
 on public.crm_settings for select
 to authenticated
-using (id = 1);
+using (id = 1 and public.is_crm_admin());
 
 create policy "Public CRM settings write"
 on public.crm_settings for all
 to authenticated
-using (id = 1)
-with check (id = 1);
+using (id = 1 and public.is_crm_admin())
+with check (id = 1 and public.is_crm_admin());
 
 insert into public.crm_settings (
   id,

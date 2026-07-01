@@ -2,14 +2,24 @@ import { createClient } from '@supabase/supabase-js'
 import { DEFAULT_SETTINGS } from './data'
 import type { DatabaseLead, DatabaseSettings, Lead, LeadInsert, Settings } from './types'
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined
+const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim()
+const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim()
+const isPlaceholderConfig =
+  !supabaseUrl ||
+  !supabaseAnonKey ||
+  supabaseUrl.includes('seu-projeto') ||
+  supabaseAnonKey.includes('sua-chave')
 
-export const hasSupabaseConfig = Boolean(supabaseUrl && supabaseAnonKey)
+export const hasSupabaseConfig = !isPlaceholderConfig
 
 export const supabase = hasSupabaseConfig
   ? createClient(supabaseUrl!, supabaseAnonKey!)
   : null
+
+function requireSupabase() {
+  if (!supabase) throw new Error('Supabase não configurado.')
+  return supabase
+}
 
 const normalizeStage = (lead: DatabaseLead) => {
   if (lead.stage === 'Contrato Assinado') return 'Protocolo Iniciado'
@@ -74,9 +84,9 @@ const mapSettingsFromDatabase = (settings: DatabaseSettings): Settings => ({
 })
 
 export async function fetchLeads() {
-  if (!supabase) return []
+  const client = requireSupabase()
 
-  const { data, error } = await supabase
+  const { data, error } = await client
     .from('leads')
     .select('*')
     .order('created_at', { ascending: false })
@@ -86,9 +96,9 @@ export async function fetchLeads() {
 }
 
 export async function createLead(lead: LeadInsert) {
-  if (!supabase) return null
+  const client = requireSupabase()
 
-  const { data, error } = await supabase
+  const { data, error } = await client
     .from('leads')
     .insert(mapLeadToDatabase(lead))
     .select('*')
@@ -99,9 +109,9 @@ export async function createLead(lead: LeadInsert) {
 }
 
 export async function updateLeadRecord(lead: Lead) {
-  if (!supabase) return null
+  const client = requireSupabase()
 
-  const { data, error } = await supabase
+  const { data, error } = await client
     .from('leads')
     .update(mapLeadToDatabase(lead))
     .eq('id', lead.id)
@@ -113,9 +123,9 @@ export async function updateLeadRecord(lead: Lead) {
 }
 
 export async function getCurrentSession() {
-  if (!supabase) return null
+  const client = requireSupabase()
 
-  const { data, error } = await supabase.auth.getSession()
+  const { data, error } = await client.auth.getSession()
   if (error) throw error
   return data.session
 }
@@ -126,35 +136,41 @@ export function getSessionUserLabel(session: Awaited<ReturnType<typeof getCurren
   return String(metadataName || session?.user?.email || '').trim()
 }
 
-export function onAuthStateChanged(callback: (isAuthenticated: boolean, userLabel?: string) => void) {
+export function getSessionUserRole(session: Awaited<ReturnType<typeof getCurrentSession>>) {
+  const appMetadata = session?.user?.app_metadata as Record<string, unknown> | undefined
+  const userMetadata = session?.user?.user_metadata as Record<string, unknown> | undefined
+  return String(appMetadata?.role || userMetadata?.role || '').trim()
+}
+
+export function onAuthStateChanged(callback: (isAuthenticated: boolean, userLabel?: string, userRole?: string) => void) {
   if (!supabase) return () => undefined
 
   const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-    callback(Boolean(session), getSessionUserLabel(session))
+    callback(Boolean(session), getSessionUserLabel(session), getSessionUserRole(session))
   })
 
   return () => data.subscription.unsubscribe()
 }
 
 export async function signInWithEmail(email: string, password: string) {
-  if (!supabase) return null
+  const client = requireSupabase()
 
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+  const { data, error } = await client.auth.signInWithPassword({ email, password })
   if (error) throw error
   return data.session
 }
 
 export async function signOutUser() {
-  if (!supabase) return
+  const client = requireSupabase()
 
-  const { error } = await supabase.auth.signOut()
+  const { error } = await client.auth.signOut()
   if (error) throw error
 }
 
 export async function fetchSettings() {
-  if (!supabase) return null
+  const client = requireSupabase()
 
-  const { data, error } = await supabase
+  const { data, error } = await client
     .from('crm_settings')
     .select('*')
     .eq('id', 1)
@@ -165,9 +181,9 @@ export async function fetchSettings() {
 }
 
 export async function saveSettings(settings: Settings) {
-  if (!supabase) return null
+  const client = requireSupabase()
 
-  const { data, error } = await supabase
+  const { data, error } = await client
     .from('crm_settings')
     .upsert({
       id: 1,
