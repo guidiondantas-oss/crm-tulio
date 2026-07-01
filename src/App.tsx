@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import './App.css'
 import { DEFAULT_SETTINGS, STAGE_CLASS, STAGES } from './data'
 import {
+  createAppUser,
   createLead,
   fetchLeads,
   fetchSettings,
@@ -22,6 +23,10 @@ type Page = 'dashboard' | 'funil' | 'leads' | 'relatorios' | 'config'
 type LeadFilter = Stage | LeadStatus | 'all'
 type SettingsOptionsKey = 'originOptions' | 'legalAreaOptions' | 'ownerOptions'
 type ReportStatusFilter = LeadStatus | 'all'
+type UserInviteForm = { name: string, email: string, password: string }
+
+const emptyUserInviteForm: UserInviteForm = { name: '', email: '', password: '' }
+const hasCrmAccessRole = (role: string) => role === 'admin' || role === 'user'
 
 const pageTitles: Record<Page, string> = {
   dashboard: 'Dashboard',
@@ -190,6 +195,9 @@ function App() {
   const [ownerDraft, setOwnerDraft] = useState('')
   const [currentUserName, setCurrentUserName] = useState(DEFAULT_SETTINGS.ownerName)
   const [currentUserRole, setCurrentUserRole] = useState('')
+  const [userInviteForm, setUserInviteForm] = useState<UserInviteForm>(emptyUserInviteForm)
+  const [isCreatingUser, setIsCreatingUser] = useState(false)
+  const [userInviteFeedback, setUserInviteFeedback] = useState<{ type: 'success' | 'error', message: string } | null>(null)
   const [reportOwner, setReportOwner] = useState('all')
   const [reportArea, setReportArea] = useState('all')
   const [reportOrigin, setReportOrigin] = useState('all')
@@ -197,6 +205,7 @@ function App() {
   const [isLoadingData, setIsLoadingData] = useState(false)
   const [dataError, setDataError] = useState('')
   const [dataReloadKey, setDataReloadKey] = useState(0)
+  const isAdmin = currentUserRole === 'admin'
 
   useEffect(() => {
     if (!hasSupabaseConfig) return
@@ -207,18 +216,18 @@ function App() {
       try {
         const session = await getCurrentSession()
         if (mounted) {
-          const isAdmin = getSessionUserRole(session) === 'admin'
-          if (session && !isAdmin) {
+          const userRole = getSessionUserRole(session)
+          if (session && !hasCrmAccessRole(userRole)) {
             await signOutUser()
             setIsAuthenticated(false)
-            setLoginError('Este usuário não tem acesso de administrador.')
+            setLoginError('Este usuário não tem acesso ao sistema.')
             return
           }
 
           setIsAuthenticated(Boolean(session))
           const userLabel = getSessionUserLabel(session)
           if (userLabel) setCurrentUserName(userLabel)
-          setCurrentUserRole(getSessionUserRole(session))
+          setCurrentUserRole(userRole)
         }
       } catch (error) {
         console.error('Erro ao verificar sessão:', error)
@@ -230,9 +239,9 @@ function App() {
     void checkSession()
 
     const unsubscribe = onAuthStateChanged((authenticated, userLabel, userRole) => {
-      if (authenticated && userRole !== 'admin') {
+      if (authenticated && !hasCrmAccessRole(userRole || '')) {
         setIsAuthenticated(false)
-        setLoginError('Este usuário não tem acesso de administrador.')
+        setLoginError('Este usuário não tem acesso ao sistema.')
         void signOutUser()
         return
       }
@@ -394,6 +403,12 @@ function App() {
   }, [activeLeads, settings])
 
   function navigate(page: Page) {
+    if (page === 'config' && !isAdmin) {
+      setActivePage('dashboard')
+      setSelectedLeadId(null)
+      return
+    }
+
     setActivePage(page)
     setSelectedLeadId(null)
   }
@@ -441,9 +456,9 @@ function App() {
     try {
       const session = await signInWithEmail(loginForm.email.trim(), loginForm.password)
       const userRole = getSessionUserRole(session)
-      if (userRole !== 'admin') {
+      if (!hasCrmAccessRole(userRole)) {
         await signOutUser()
-        setLoginError('Este usuário não tem acesso de administrador.')
+        setLoginError('Este usuário não tem acesso ao sistema.')
         return
       }
 
@@ -650,6 +665,42 @@ function App() {
     }
   }
 
+  async function handleCreateUser(event: FormEvent) {
+    event.preventDefault()
+    setUserInviteFeedback(null)
+
+    if (!isAdmin) {
+      setUserInviteFeedback({ type: 'error', message: 'Apenas o administrador pode criar usuários.' })
+      return
+    }
+
+    const name = userInviteForm.name.trim()
+    const email = userInviteForm.email.trim().toLowerCase()
+    const password = userInviteForm.password
+
+    if (!name || !email || !password) {
+      setUserInviteFeedback({ type: 'error', message: 'Preencha nome, e-mail e senha.' })
+      return
+    }
+
+    if (password.length < 8) {
+      setUserInviteFeedback({ type: 'error', message: 'A senha precisa ter pelo menos 8 caracteres.' })
+      return
+    }
+
+    setIsCreatingUser(true)
+    try {
+      const user = await createAppUser({ name, email, password })
+      setUserInviteForm(emptyUserInviteForm)
+      setUserInviteFeedback({ type: 'success', message: `Usuário criado: ${user.email}` })
+    } catch (error) {
+      console.error('Erro ao criar usuário:', error)
+      setUserInviteFeedback({ type: 'error', message: 'Não foi possível criar o usuário.' })
+    } finally {
+      setIsCreatingUser(false)
+    }
+  }
+
   const userInitials = currentUserName
     .split(/[\s@.]+/)
     .filter(Boolean)
@@ -717,19 +768,21 @@ function App() {
           </button>
         </div>
 
-        <div className="nav-section">
-          <div className="nav-section-label">Config</div>
-          <button className={`nav-item ${activePage === 'config' ? 'active' : ''}`} onClick={() => navigate('config')}>
-            <span className="nav-icon">◎</span> Configurações
-          </button>
-        </div>
+        {isAdmin && (
+          <div className="nav-section">
+            <div className="nav-section-label">Config</div>
+            <button className={`nav-item ${activePage === 'config' ? 'active' : ''}`} onClick={() => navigate('config')}>
+              <span className="nav-icon">◎</span> Configurações
+            </button>
+          </div>
+        )}
 
         <div className="sidebar-footer">
           <div className="user-card">
             <div className="user-avatar">{userInitials}</div>
             <div>
               <div className="user-name">{currentUserName}</div>
-              <div className="user-role">{currentUserRole === 'admin' ? 'Administrador' : 'Usuário autenticado'}</div>
+              <div className="user-role">{isAdmin ? 'Administrador' : 'Usuário'}</div>
             </div>
           </div>
           <button className="logout-button" onClick={() => void handleLogout()}>Sair</button>
@@ -995,7 +1048,7 @@ function App() {
             </div>
           )}
 
-          {!isLoadingData && !dataError && activePage === 'config' && (
+          {!isLoadingData && !dataError && activePage === 'config' && isAdmin && (
             <div className="page-view active">
               <div className="table-wrap config-wrap">
                 <div className="table-toolbar">
@@ -1092,6 +1145,49 @@ function App() {
                     <div className="config-hint">Use 0 para desativar a tarefa automática de uma etapa.</div>
                   </div>
                   <button className="btn btn-gold config-save" onClick={handleSaveSettings}>Salvar Configurações</button>
+                  <form className="config-section user-create-form" onSubmit={(event) => void handleCreateUser(event)}>
+                    <div className="config-section-title">Usuários do Sistema</div>
+                    <div className="form-row">
+                      <label className="form-group">
+                        <span className="form-label">Nome</span>
+                        <input
+                          className="form-input"
+                          value={userInviteForm.name}
+                          onChange={(event) => setUserInviteForm({ ...userInviteForm, name: event.target.value })}
+                          disabled={isCreatingUser}
+                        />
+                      </label>
+                      <label className="form-group">
+                        <span className="form-label">E-mail</span>
+                        <input
+                          className="form-input"
+                          type="email"
+                          value={userInviteForm.email}
+                          onChange={(event) => setUserInviteForm({ ...userInviteForm, email: event.target.value })}
+                          disabled={isCreatingUser}
+                        />
+                      </label>
+                    </div>
+                    <label className="form-group">
+                      <span className="form-label">Senha Provisória</span>
+                      <input
+                        className="form-input"
+                        type="password"
+                        autoComplete="new-password"
+                        value={userInviteForm.password}
+                        onChange={(event) => setUserInviteForm({ ...userInviteForm, password: event.target.value })}
+                        disabled={isCreatingUser}
+                      />
+                    </label>
+                    <button className="btn btn-outline config-save" disabled={isCreatingUser}>
+                      {isCreatingUser ? 'Criando...' : 'Criar Usuário'}
+                    </button>
+                    {userInviteFeedback && (
+                      <div className={`config-status ${userInviteFeedback.type === 'error' ? 'error' : ''}`}>
+                        {userInviteFeedback.message}
+                      </div>
+                    )}
+                  </form>
                 </div>
               </div>
             </div>
@@ -1099,12 +1195,12 @@ function App() {
         </div>
       </main>
 
-      <nav className="mobile-nav" aria-label="Navegação principal">
+      <nav className={`mobile-nav ${isAdmin ? 'with-config' : ''}`} aria-label="Navegação principal">
         <button className={activePage === 'dashboard' ? 'active' : ''} onClick={() => navigate('dashboard')}>Início</button>
         <button className={activePage === 'funil' ? 'active' : ''} onClick={() => navigate('funil')}>Funil</button>
         <button className={activePage === 'leads' ? 'active' : ''} onClick={() => openLeads()}>Leads</button>
         <button className={activePage === 'relatorios' ? 'active' : ''} onClick={() => navigate('relatorios')}>Indicadores</button>
-        <button className={activePage === 'config' ? 'active' : ''} onClick={() => navigate('config')}>Config</button>
+        {isAdmin && <button className={activePage === 'config' ? 'active' : ''} onClick={() => navigate('config')}>Config</button>}
       </nav>
 
       <div className={`modal-overlay ${isModalOpen ? 'open' : ''}`} onMouseDown={(event) => {

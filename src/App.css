@@ -1557,6 +1557,23 @@ tbody td {
   min-width: 92px;
 }
 
+.user-create-form {
+  margin-top: 2px;
+}
+
+.config-status {
+  padding: 9px 10px;
+  border-radius: 6px;
+  background: #e8f5e9;
+  color: #1a6a30;
+  font-size: 12px;
+}
+
+.config-status.error {
+  background: #fdecea;
+  color: var(--red);
+}
+
 .config-save {
   width: fit-content;
 }
@@ -1692,12 +1709,16 @@ tbody td {
     bottom: 0;
     left: 0;
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     padding: 7px 8px calc(7px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--border);
     background: rgba(255, 255, 255, .97);
     box-shadow: 0 -4px 18px rgba(12, 31, 58, .08);
     backdrop-filter: blur(8px);
+  }
+
+  .mobile-nav.with-config {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .mobile-nav button {

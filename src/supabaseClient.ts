@@ -2,6 +2,12 @@ import { createClient } from '@supabase/supabase-js'
 import { DEFAULT_SETTINGS } from './data'
 import type { DatabaseLead, DatabaseSettings, Lead, LeadInsert, Settings } from './types'
 
+export type AppUserInsert = {
+  name: string
+  email: string
+  password: string
+}
+
 const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim()
 const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim()
 const isPlaceholderConfig =
@@ -165,6 +171,18 @@ export async function signOutUser() {
 
   const { error } = await client.auth.signOut()
   if (error) throw error
+}
+
+export async function createAppUser(user: AppUserInsert) {
+  const client = requireSupabase()
+
+  const { data, error } = await client.functions.invoke<{ user: { id: string, email: string } }>('create-user', {
+    body: user,
+  })
+
+  if (error) throw error
+  if (!data?.user) throw new Error('Resposta vazia ao criar usuario.')
+  return data.user
 }
 
 export async function fetchSettings() {

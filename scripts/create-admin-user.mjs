@@ -24,20 +24,24 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
   },
 })
 
-async function findUserByEmail(email) {
+async function listAllUsers() {
   let page = 1
   const perPage = 1000
-  const normalizedEmail = email.toLowerCase()
+  const users = []
 
   while (true) {
     const { data, error } = await supabase.auth.admin.listUsers({ page, perPage })
     if (error) throw error
 
-    const user = data.users.find((item) => item.email?.toLowerCase() === normalizedEmail)
-    if (user) return user
-    if (!data.nextPage) return null
+    users.push(...data.users)
+    if (!data.nextPage) return users
     page = data.nextPage
   }
+}
+
+const isAdminUser = (user) => {
+  const role = user.app_metadata?.role || user.user_metadata?.role
+  return role === 'admin'
 }
 
 const metadata = {
@@ -47,7 +51,15 @@ const metadata = {
 }
 
 try {
-  const existingUser = await findUserByEmail(adminEmail)
+  const users = await listAllUsers()
+  const normalizedAdminEmail = adminEmail.toLowerCase()
+  const existingUser = users.find((item) => item.email?.toLowerCase() === normalizedAdminEmail)
+  const existingAdmin = users.find(isAdminUser)
+
+  if (existingAdmin && existingAdmin.id !== existingUser?.id) {
+    fail(`Ja existe um administrador cadastrado: ${existingAdmin.email}`)
+  }
+
   const userPayload = {
     email: adminEmail,
     password: adminPassword,

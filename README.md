@@ -26,13 +26,13 @@ VITE_SUPABASE_ANON_KEY=sua-chave-anon-public
 
 6. Crie o usuário administrador com o script abaixo.
 
-As policies do arquivo SQL exigem Supabase Auth e aceitam apenas usuários com `app_metadata.role = "admin"`. Com as variáveis configuradas, a tela de login usa e-mail e senha do administrador criado no Supabase.
+As policies do arquivo SQL exigem Supabase Auth e aceitam usuários com `app_metadata.role = "admin"` ou `app_metadata.role = "user"`. Com as variáveis configuradas, a tela de login usa e-mail e senha dos usuários criados no Supabase.
 
 O `schema.sql` também cria as configurações da automação de retorno dos três primeiros contatos, a data de entrada em cada etapa do funil, as listas editáveis do formulário e os campos usados nos indicadores.
 
 ## Criar administrador
 
-No Supabase, copie a `service_role key` em Project Settings > API. Use essa chave somente no terminal local, nunca no front-end e nunca nas variáveis da Vercel do site.
+No Supabase, copie a `service_role key` em Project Settings > API. Use essa chave somente no terminal local ou como secret de Edge Function, nunca no front-end e nunca nas variáveis da Vercel do site.
 
 PowerShell:
 
@@ -45,7 +45,19 @@ $env:ADMIN_NAME="Administrador"
 npm run create-admin
 ```
 
-Se o e-mail já existir no Supabase Auth, o script atualiza a senha e marca o usuário como administrador.
+Se o e-mail já existir no Supabase Auth, o script atualiza a senha e marca o usuário como administrador. Se já existir outro administrador, o script para sem criar um segundo admin.
+
+## Criar usuários pelo CRM
+
+Depois que o administrador inicial entrar no sistema, ele pode criar usuários comuns em Configurações > Usuários do Sistema. Essa ação usa a Edge Function `create-user`, que precisa estar publicada no Supabase:
+
+```bash
+supabase link --project-ref seu-project-ref
+supabase secrets set SUPABASE_SERVICE_ROLE_KEY=sua-chave-service-role
+supabase functions deploy create-user
+```
+
+Os usuários criados pelo CRM recebem `app_metadata.role = "user"`. Eles acessam o CRM, mas não veem a área de Configurações.
 
 ## Vercel
 

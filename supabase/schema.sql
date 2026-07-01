@@ -166,6 +166,14 @@ as $$
   select coalesce(auth.jwt() -> 'app_metadata' ->> 'role', '') = 'admin';
 $$;
 
+create or replace function public.is_crm_user()
+returns boolean
+language sql
+stable
+as $$
+  select coalesce(auth.jwt() -> 'app_metadata' ->> 'role', '') in ('admin', 'user');
+$$;
+
 drop policy if exists "Public CRM lead read" on public.leads;
 drop policy if exists "Public CRM lead insert" on public.leads;
 drop policy if exists "Public CRM lead update" on public.leads;
@@ -176,28 +184,28 @@ drop policy if exists "Public CRM settings write" on public.crm_settings;
 create policy "Public CRM lead read"
 on public.leads for select
 to authenticated
-using (public.is_crm_admin());
+using (public.is_crm_user());
 
 create policy "Public CRM lead insert"
 on public.leads for insert
 to authenticated
-with check (public.is_crm_admin());
+with check (public.is_crm_user());
 
 create policy "Public CRM lead update"
 on public.leads for update
 to authenticated
-using (public.is_crm_admin())
-with check (public.is_crm_admin());
+using (public.is_crm_user())
+with check (public.is_crm_user());
 
 create policy "Public CRM lead delete"
 on public.leads for delete
 to authenticated
-using (public.is_crm_admin());
+using (public.is_crm_user());
 
 create policy "Public CRM settings read"
 on public.crm_settings for select
 to authenticated
-using (id = 1 and public.is_crm_admin());
+using (id = 1 and public.is_crm_user());
 
 create policy "Public CRM settings write"
 on public.crm_settings for all
