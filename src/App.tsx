@@ -727,7 +727,6 @@ function App() {
         loginForm={loginForm}
         loginError={loginError}
         isLoggingIn={isLoggingIn}
-        isAuthConfigured={hasSupabaseConfig}
         setLoginForm={setLoginForm}
         handleLogin={handleLogin}
       />
@@ -1287,16 +1286,15 @@ function App() {
   )
 }
 
-function LoginScreen({ firmName, loginForm, loginError, isLoggingIn, isAuthConfigured, setLoginForm, handleLogin }: {
+function LoginScreen({ firmName, loginForm, loginError, isLoggingIn, setLoginForm, handleLogin }: {
   firmName: string
   loginForm: { email: string, password: string }
   loginError: string
   isLoggingIn: boolean
-  isAuthConfigured: boolean
   setLoginForm: (form: { email: string, password: string }) => void
   handleLogin: (event: FormEvent) => Promise<void>
 }) {
-  const accessError = loginError || (!isAuthConfigured ? 'Supabase não configurado. Confira as variáveis da Vercel.' : '')
+  const accessError = loginError
 
   return (
     <div className="login-shell">
@@ -1312,7 +1310,7 @@ function LoginScreen({ firmName, loginForm, loginError, isLoggingIn, isAuthConfi
             value={loginForm.email}
             onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })}
             placeholder="email@escritorio.com"
-            disabled={isLoggingIn || !isAuthConfigured}
+            disabled={isLoggingIn}
           />
         </label>
         <label className="form-group">
@@ -1324,11 +1322,11 @@ function LoginScreen({ firmName, loginForm, loginError, isLoggingIn, isAuthConfi
             value={loginForm.password}
             onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })}
             placeholder="Sua senha"
-            disabled={isLoggingIn || !isAuthConfigured}
+            disabled={isLoggingIn}
           />
         </label>
         {accessError && <div className="login-error">{accessError}</div>}
-        <button className="btn btn-gold login-button" disabled={isLoggingIn || !isAuthConfigured}>
+        <button className="btn btn-gold login-button" disabled={isLoggingIn}>
           {isLoggingIn ? 'Entrando...' : 'Entrar'}
         </button>
       </form>
