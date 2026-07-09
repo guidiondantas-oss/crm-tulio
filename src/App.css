@@ -1509,7 +1509,7 @@ tbody td {
 }
 
 .config-wrap {
-  max-width: 520px;
+  max-width: 980px;
 }
 
 .config-form {
@@ -1533,6 +1533,13 @@ tbody td {
   font-size: 12px;
   font-weight: 700;
   color: var(--navy);
+}
+
+.config-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .config-hint {
@@ -1576,6 +1583,80 @@ tbody td {
 
 .config-save {
   width: fit-content;
+}
+
+.user-management-section {
+  gap: 14px;
+}
+
+.user-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.user-table tbody tr {
+  cursor: default;
+}
+
+.managed-user-name {
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.managed-user-email,
+.managed-user-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text3);
+}
+
+.managed-user-meta {
+  font-size: 10px;
+}
+
+.user-status-active {
+  background: #e8f5e9;
+  color: var(--green);
+}
+
+.user-status-suspended {
+  background: #fdecea;
+  color: var(--red);
+}
+
+.inline-password-form {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) auto;
+  gap: 8px;
+  min-width: 270px;
+}
+
+.inline-password-form .form-input {
+  min-width: 0;
+}
+
+.user-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.user-actions .btn,
+.inline-password-form .btn {
+  padding: 7px 10px;
+  white-space: nowrap;
+}
+
+.danger-button {
+  color: var(--red);
+}
+
+.danger-button:hover {
+  border-color: var(--red);
+  color: var(--red);
+  background: #fdecea;
 }
 
 .table-empty {

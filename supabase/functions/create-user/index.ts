@@ -86,6 +86,8 @@ Deno.serve(async (request) => {
     },
     app_metadata: {
       role: 'user',
+      created_by: authData.user.id,
+      created_by_email: authData.user.email,
     },
   })
 

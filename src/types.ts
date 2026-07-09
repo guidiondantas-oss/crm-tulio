@@ -12,6 +12,7 @@ export type Stage =
 
 export type LeadStatus = 'Ativo' | 'Contrato Assinado' | 'Perdido'
 export type DatabaseStage = Stage | 'Pasta Completa' | 'Revisão Advogado' | 'Contrato Assinado'
+export type ManagedUserStatus = 'active' | 'suspended'
 
 export type Lead = {
   id: string
@@ -33,6 +34,19 @@ export type Lead = {
 }
 
 export type LeadInsert = Omit<Lead, 'id' | 'createdAt'>
+
+export type ManagedUser = {
+  id: string
+  name: string
+  email: string
+  role: string
+  status: ManagedUserStatus
+  createdAt: string
+  lastSignInAt: string | null
+  bannedUntil: string | null
+  createdBy: string
+  createdByEmail: string
+}
 
 export type Settings = {
   firmName: string

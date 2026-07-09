@@ -39,11 +39,6 @@ async function listAllUsers() {
   }
 }
 
-const isAdminUser = (user) => {
-  const role = user.app_metadata?.role || user.user_metadata?.role
-  return role === 'admin'
-}
-
 const metadata = {
   name: adminName,
   full_name: adminName,
@@ -54,11 +49,6 @@ try {
   const users = await listAllUsers()
   const normalizedAdminEmail = adminEmail.toLowerCase()
   const existingUser = users.find((item) => item.email?.toLowerCase() === normalizedAdminEmail)
-  const existingAdmin = users.find(isAdminUser)
-
-  if (existingAdmin && existingAdmin.id !== existingUser?.id) {
-    fail(`Ja existe um administrador cadastrado: ${existingAdmin.email}`)
-  }
 
   const userPayload = {
     email: adminEmail,

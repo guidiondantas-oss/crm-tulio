@@ -1,11 +1,18 @@
 import { createClient } from '@supabase/supabase-js'
 import { DEFAULT_SETTINGS } from './data'
-import type { DatabaseLead, DatabaseSettings, Lead, LeadInsert, Settings } from './types'
+import type { DatabaseLead, DatabaseSettings, Lead, LeadInsert, ManagedUser, Settings } from './types'
 
 export type AppUserInsert = {
   name: string
   email: string
   password: string
+}
+
+type ManageUsersResponse = {
+  users?: ManagedUser[]
+  user?: ManagedUser
+  deleted?: boolean
+  userId?: string
 }
 
 const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim()
@@ -183,6 +190,46 @@ export async function createAppUser(user: AppUserInsert) {
   if (error) throw error
   if (!data?.user) throw new Error('Resposta vazia ao criar usuario.')
   return data.user
+}
+
+async function invokeManageUsers(body: Record<string, unknown>) {
+  const client = requireSupabase()
+
+  const { data, error } = await client.functions.invoke<ManageUsersResponse>('manage-users', {
+    body,
+  })
+
+  if (error) throw error
+  return data || {}
+}
+
+export async function fetchAppUsers() {
+  const data = await invokeManageUsers({ action: 'list' })
+  return data.users || []
+}
+
+export async function suspendAppUser(userId: string) {
+  const data = await invokeManageUsers({ action: 'suspend', userId })
+  if (!data.user) throw new Error('Resposta vazia ao suspender usuário.')
+  return data.user
+}
+
+export async function activateAppUser(userId: string) {
+  const data = await invokeManageUsers({ action: 'activate', userId })
+  if (!data.user) throw new Error('Resposta vazia ao reativar usuário.')
+  return data.user
+}
+
+export async function updateAppUserPassword(userId: string, password: string) {
+  const data = await invokeManageUsers({ action: 'set-password', userId, password })
+  if (!data.user) throw new Error('Resposta vazia ao trocar senha.')
+  return data.user
+}
+
+export async function deleteAppUser(userId: string) {
+  const data = await invokeManageUsers({ action: 'delete', userId })
+  if (!data.deleted) throw new Error('Resposta vazia ao excluir usuário.')
+  return data.userId || userId
 }
 
 export async function fetchSettings() {

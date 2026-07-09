@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { Dispatch, FormEvent, SetStateAction } from 'react'
 import './App.css'
 import { DEFAULT_SETTINGS, STAGE_CLASS, STAGES } from './data'
 import {
+  activateAppUser,
   createAppUser,
   createLead,
+  deleteAppUser,
+  fetchAppUsers,
   fetchLeads,
   fetchSettings,
   getCurrentSession,
@@ -15,15 +18,18 @@ import {
   saveSettings,
   signInWithEmail,
   signOutUser,
+  suspendAppUser,
+  updateAppUserPassword,
   updateLeadRecord,
 } from './supabaseClient'
-import type { Lead, LeadInsert, LeadStatus, Settings, Stage } from './types'
+import type { Lead, LeadInsert, LeadStatus, ManagedUser, Settings, Stage } from './types'
 
 type Page = 'dashboard' | 'funil' | 'leads' | 'relatorios' | 'config'
 type LeadFilter = Stage | LeadStatus | 'all'
 type SettingsOptionsKey = 'originOptions' | 'legalAreaOptions' | 'ownerOptions'
 type ReportStatusFilter = LeadStatus | 'all'
 type UserInviteForm = { name: string, email: string, password: string }
+type UserFeedback = { type: 'success' | 'error', message: string }
 
 const emptyUserInviteForm: UserInviteForm = { name: '', email: '', password: '' }
 const hasCrmAccessRole = (role: string) => role === 'admin' || role === 'user'
@@ -197,7 +203,13 @@ function App() {
   const [currentUserRole, setCurrentUserRole] = useState('')
   const [userInviteForm, setUserInviteForm] = useState<UserInviteForm>(emptyUserInviteForm)
   const [isCreatingUser, setIsCreatingUser] = useState(false)
-  const [userInviteFeedback, setUserInviteFeedback] = useState<{ type: 'success' | 'error', message: string } | null>(null)
+  const [userInviteFeedback, setUserInviteFeedback] = useState<UserFeedback | null>(null)
+  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([])
+  const [isLoadingUsers, setIsLoadingUsers] = useState(false)
+  const [userManagementFeedback, setUserManagementFeedback] = useState<UserFeedback | null>(null)
+  const [userActionId, setUserActionId] = useState<string | null>(null)
+  const [userPasswordDrafts, setUserPasswordDrafts] = useState<Record<string, string>>({})
+  const [usersReloadKey, setUsersReloadKey] = useState(0)
   const [reportOwner, setReportOwner] = useState('all')
   const [reportArea, setReportArea] = useState('all')
   const [reportOrigin, setReportOrigin] = useState('all')
@@ -254,6 +266,9 @@ function App() {
         setSelectedLeadId(null)
         setCurrentUserName(DEFAULT_SETTINGS.ownerName)
         setCurrentUserRole('')
+        setManagedUsers([])
+        setUserPasswordDrafts({})
+        setUserManagementFeedback(null)
         setDataError('')
         setIsLoadingData(false)
       }
@@ -301,6 +316,36 @@ function App() {
       cancelled = true
     }
   }, [dataReloadKey, isAuthenticated])
+
+  useEffect(() => {
+    if (!isAuthenticated || !isAdmin || activePage !== 'config') return
+    if (!hasSupabaseConfig) return
+
+    let cancelled = false
+
+    async function loadUsers() {
+      setIsLoadingUsers(true)
+      setUserManagementFeedback(null)
+      try {
+        const users = await fetchAppUsers()
+        if (!cancelled) setManagedUsers(users)
+      } catch (error) {
+        console.error('Erro ao carregar usuários:', error)
+        if (!cancelled) {
+          setManagedUsers([])
+          setUserManagementFeedback({ type: 'error', message: 'Não foi possível carregar os usuários.' })
+        }
+      } finally {
+        if (!cancelled) setIsLoadingUsers(false)
+      }
+    }
+
+    void loadUsers()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activePage, isAdmin, isAuthenticated, usersReloadKey])
 
   const selectedLead = useMemo(
     () => leads.find((lead) => lead.id === selectedLeadId) || null,
@@ -693,11 +738,89 @@ function App() {
       const user = await createAppUser({ name, email, password })
       setUserInviteForm(emptyUserInviteForm)
       setUserInviteFeedback({ type: 'success', message: `Usuário criado: ${user.email}` })
+      setUsersReloadKey((current) => current + 1)
     } catch (error) {
       console.error('Erro ao criar usuário:', error)
       setUserInviteFeedback({ type: 'error', message: 'Não foi possível criar o usuário.' })
     } finally {
       setIsCreatingUser(false)
+    }
+  }
+
+  function replaceManagedUser(updatedUser: ManagedUser) {
+    setManagedUsers((users) => users.map((user) => user.id === updatedUser.id ? updatedUser : user))
+  }
+
+  async function handleSuspendUser(user: ManagedUser) {
+    if (!window.confirm(`Suspender o acesso de ${user.name || user.email}?`)) return
+
+    setUserActionId(`suspend:${user.id}`)
+    setUserManagementFeedback(null)
+    try {
+      const updatedUser = await suspendAppUser(user.id)
+      replaceManagedUser(updatedUser)
+      setUserManagementFeedback({ type: 'success', message: `Acesso suspenso para ${updatedUser.email}.` })
+    } catch (error) {
+      console.error('Erro ao suspender usuário:', error)
+      setUserManagementFeedback({ type: 'error', message: 'Não foi possível suspender o usuário.' })
+    } finally {
+      setUserActionId(null)
+    }
+  }
+
+  async function handleActivateUser(user: ManagedUser) {
+    setUserActionId(`activate:${user.id}`)
+    setUserManagementFeedback(null)
+    try {
+      const updatedUser = await activateAppUser(user.id)
+      replaceManagedUser(updatedUser)
+      setUserManagementFeedback({ type: 'success', message: `Acesso reativado para ${updatedUser.email}.` })
+    } catch (error) {
+      console.error('Erro ao reativar usuário:', error)
+      setUserManagementFeedback({ type: 'error', message: 'Não foi possível reativar o usuário.' })
+    } finally {
+      setUserActionId(null)
+    }
+  }
+
+  async function handleDeleteUser(user: ManagedUser) {
+    if (!window.confirm(`Excluir definitivamente o usuário ${user.name || user.email}?`)) return
+
+    setUserActionId(`delete:${user.id}`)
+    setUserManagementFeedback(null)
+    try {
+      await deleteAppUser(user.id)
+      setManagedUsers((users) => users.filter((item) => item.id !== user.id))
+      setUserManagementFeedback({ type: 'success', message: `Usuário excluído: ${user.email}.` })
+    } catch (error) {
+      console.error('Erro ao excluir usuário:', error)
+      setUserManagementFeedback({ type: 'error', message: 'Não foi possível excluir o usuário.' })
+    } finally {
+      setUserActionId(null)
+    }
+  }
+
+  async function handleUpdateUserPassword(event: FormEvent, user: ManagedUser) {
+    event.preventDefault()
+
+    const password = userPasswordDrafts[user.id] || ''
+    if (password.length < 8) {
+      setUserManagementFeedback({ type: 'error', message: 'A nova senha precisa ter pelo menos 8 caracteres.' })
+      return
+    }
+
+    setUserActionId(`password:${user.id}`)
+    setUserManagementFeedback(null)
+    try {
+      const updatedUser = await updateAppUserPassword(user.id, password)
+      replaceManagedUser(updatedUser)
+      setUserPasswordDrafts((drafts) => ({ ...drafts, [user.id]: '' }))
+      setUserManagementFeedback({ type: 'success', message: `Senha atualizada para ${updatedUser.email}.` })
+    } catch (error) {
+      console.error('Erro ao trocar senha:', error)
+      setUserManagementFeedback({ type: 'error', message: 'Não foi possível trocar a senha.' })
+    } finally {
+      setUserActionId(null)
     }
   }
 
@@ -1187,6 +1310,19 @@ function App() {
                       </div>
                     )}
                   </form>
+                  <ManagedUsersSection
+                    users={managedUsers}
+                    isLoading={isLoadingUsers}
+                    feedback={userManagementFeedback}
+                    actionId={userActionId}
+                    passwordDrafts={userPasswordDrafts}
+                    setPasswordDrafts={setUserPasswordDrafts}
+                    reloadUsers={() => setUsersReloadKey((current) => current + 1)}
+                    suspendUser={handleSuspendUser}
+                    activateUser={handleActivateUser}
+                    deleteUser={handleDeleteUser}
+                    updatePassword={handleUpdateUserPassword}
+                  />
                 </div>
               </div>
             </div>
@@ -1374,6 +1510,123 @@ function ConfigOptionsSection({ title, options, draft, placeholder, onDraftChang
         />
         <button className="btn btn-outline" onClick={onAdd}>Adicionar</button>
       </div>
+    </div>
+  )
+}
+
+function ManagedUsersSection({ users, isLoading, feedback, actionId, passwordDrafts, setPasswordDrafts, reloadUsers, suspendUser, activateUser, deleteUser, updatePassword }: {
+  users: ManagedUser[]
+  isLoading: boolean
+  feedback: UserFeedback | null
+  actionId: string | null
+  passwordDrafts: Record<string, string>
+  setPasswordDrafts: Dispatch<SetStateAction<Record<string, string>>>
+  reloadUsers: () => void
+  suspendUser: (user: ManagedUser) => Promise<void>
+  activateUser: (user: ManagedUser) => Promise<void>
+  deleteUser: (user: ManagedUser) => Promise<void>
+  updatePassword: (event: FormEvent, user: ManagedUser) => Promise<void>
+}) {
+  return (
+    <div className="config-section user-management-section">
+      <div className="config-section-head">
+        <div>
+          <div className="config-section-title">Gerenciar Colaboradores</div>
+          <div className="config-hint">Suspenda acesso, reative, exclua ou defina uma nova senha para usuários colaboradores.</div>
+        </div>
+        <button type="button" className="btn btn-outline" disabled={isLoading} onClick={reloadUsers}>
+          {isLoading ? 'Carregando...' : 'Atualizar'}
+        </button>
+      </div>
+
+      {feedback && (
+        <div className={`config-status ${feedback.type === 'error' ? 'error' : ''}`}>
+          {feedback.message}
+        </div>
+      )}
+
+      {isLoading && users.length === 0 ? (
+        <div className="empty table-empty">Carregando usuários...</div>
+      ) : users.length === 0 ? (
+        <div className="empty table-empty">Nenhum colaborador criado ainda</div>
+      ) : (
+        <div className="user-table-wrap">
+          <table className="user-table">
+            <thead>
+              <tr>
+                <th>Usuário</th>
+                <th>Status</th>
+                <th>Criado em</th>
+                <th>Último acesso</th>
+                <th>Nova senha</th>
+                <th>Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((user) => {
+                const isSuspended = user.status === 'suspended'
+                const isBusy = Boolean(actionId?.endsWith(`:${user.id}`))
+                const passwordActionId = `password:${user.id}`
+                const accessActionId = `${isSuspended ? 'activate' : 'suspend'}:${user.id}`
+                const deleteActionId = `delete:${user.id}`
+
+                return (
+                  <tr key={user.id}>
+                    <td>
+                      <div className="managed-user-name">{user.name || user.email}</div>
+                      <div className="managed-user-email">{user.email}</div>
+                      {user.createdByEmail && <div className="managed-user-meta">Criado por {user.createdByEmail}</div>}
+                    </td>
+                    <td>
+                      <span className={`status-pill user-status-${user.status}`}>
+                        {isSuspended ? 'Suspenso' : 'Ativo'}
+                      </span>
+                    </td>
+                    <td className="muted-cell">{formatDate(user.createdAt)}</td>
+                    <td className="muted-cell">{user.lastSignInAt ? formatDate(user.lastSignInAt) : 'Nunca'}</td>
+                    <td>
+                      <form className="inline-password-form" onSubmit={(event) => void updatePassword(event, user)}>
+                        <input
+                          className="form-input"
+                          type="password"
+                          autoComplete="new-password"
+                          placeholder="Mín. 8 caracteres"
+                          value={passwordDrafts[user.id] || ''}
+                          onChange={(event) => setPasswordDrafts((drafts) => ({ ...drafts, [user.id]: event.target.value }))}
+                          disabled={isBusy}
+                        />
+                        <button type="submit" className="btn btn-outline" disabled={actionId === passwordActionId}>
+                          {actionId === passwordActionId ? 'Salvando...' : 'Trocar'}
+                        </button>
+                      </form>
+                    </td>
+                    <td>
+                      <div className="user-actions">
+                        <button
+                          type="button"
+                          className="btn btn-outline"
+                          disabled={isBusy}
+                          onClick={() => void (isSuspended ? activateUser(user) : suspendUser(user))}
+                        >
+                          {actionId === accessActionId ? 'Aguarde...' : isSuspended ? 'Reativar' : 'Suspender'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-outline danger-button"
+                          disabled={isBusy}
+                          onClick={() => void deleteUser(user)}
+                        >
+                          {actionId === deleteActionId ? 'Excluindo...' : 'Excluir'}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

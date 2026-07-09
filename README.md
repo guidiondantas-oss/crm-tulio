@@ -45,19 +45,20 @@ $env:ADMIN_NAME="Administrador"
 npm run create-admin
 ```
 
-Se o e-mail já existir no Supabase Auth, o script atualiza a senha e marca o usuário como administrador. Se já existir outro administrador, o script para sem criar um segundo admin.
+Se o e-mail já existir no Supabase Auth, o script atualiza a senha e marca o usuário como administrador. Se não existir, o script cria um novo administrador. O sistema aceita mais de um administrador.
 
 ## Criar usuários pelo CRM
 
-Depois que o administrador inicial entrar no sistema, ele pode criar usuários comuns em Configurações > Usuários do Sistema. Essa ação usa a Edge Function `create-user`, que precisa estar publicada no Supabase:
+Depois que o administrador inicial entrar no sistema, ele pode criar e gerenciar usuários comuns em Configurações > Usuários do Sistema. Essas ações usam as Edge Functions `create-user` e `manage-users`, que precisam estar publicadas no Supabase:
 
 ```bash
 supabase link --project-ref seu-project-ref
 supabase secrets set SUPABASE_SERVICE_ROLE_KEY=sua-chave-service-role
 supabase functions deploy create-user
+supabase functions deploy manage-users
 ```
 
-Os usuários criados pelo CRM recebem `app_metadata.role = "user"`. Eles acessam o CRM, mas não veem a área de Configurações.
+Os usuários criados pelo CRM recebem `app_metadata.role = "user"`. Eles acessam o CRM, mas não veem a área de Configurações. O administrador também pode suspender acesso, reativar, excluir e trocar senha dos colaboradores em Configurações > Usuários do Sistema.
 
 ## Vercel
 
