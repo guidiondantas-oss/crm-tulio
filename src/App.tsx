@@ -836,7 +836,7 @@ function App() {
     return (
       <div className="login-shell">
         <div className="login-card">
-          <div className="login-brand">{settings.firmName}</div>
+          <img className="login-logo" src="/logo-tulio-lopes.svg" alt={settings.firmName} />
           <div className="login-status">Carregando acesso...</div>
         </div>
       </div>
@@ -860,7 +860,7 @@ function App() {
     <>
       <aside className="sidebar">
         <div className="sidebar-logo">
-          <div className="firm-name">{settings.firmName.replace(' Advocacia', '')}<br />Advocacia</div>
+          <img className="brand-logo" src="/logo-tulio-lopes.svg" alt={settings.firmName} />
           <div className="crm-label">CRM v1.0</div>
         </div>
 
@@ -1435,7 +1435,7 @@ function LoginScreen({ firmName, loginForm, loginError, isLoggingIn, setLoginFor
   return (
     <div className="login-shell">
       <form className="login-card" onSubmit={(event) => void handleLogin(event)}>
-        <div className="login-brand">{firmName}</div>
+        <img className="login-logo" src="/logo-tulio-lopes.svg" alt={firmName} />
         <div className="login-title">Acesso ao sistema</div>
         <label className="form-group">
           <span className="form-label">Login</span>
