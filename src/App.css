@@ -1008,11 +1008,62 @@ tbody td {
   gap: 12px;
 }
 
+.detail-title-block {
+  min-width: 0;
+  flex: 1;
+}
+
+.detail-name-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
 .detail-name {
   font-family: 'Playfair Display', serif;
   font-size: 18px;
   color: var(--gold2);
   font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.detail-name-action {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.detail-name-action.primary {
+  background: var(--gold);
+  color: var(--navy);
+}
+
+.lead-name-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.lead-name-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgba(232, 173, 74, .45);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .08);
+  color: var(--gold2);
+  font-family: 'Playfair Display', serif;
+  font-size: 18px;
+  font-weight: 600;
+  outline: none;
+}
+
+.lead-name-input:focus {
+  border-color: var(--gold2);
+  background: rgba(255, 255, 255, .12);
+}
+
+.lead-name-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .detail-sub {

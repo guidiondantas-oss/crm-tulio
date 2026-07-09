@@ -651,6 +651,27 @@ function App() {
     return persistLeadUpdate(updatedLead, 'Erro ao salvar observações:')
   }
 
+  async function saveLeadName(id: string, name: string) {
+    const lead = leads.find((item) => item.id === id)
+    const nextName = name.trim()
+    if (!lead) return false
+
+    if (!nextName) {
+      window.alert('Informe o nome do lead.')
+      return false
+    }
+
+    if (lead.name === nextName) return true
+
+    const updatedLead = {
+      ...lead,
+      name: nextName,
+      activity: [activityEntry(`Nome atualizado de "${lead.name}" para "${nextName}"`, currentUserName), ...lead.activity],
+    }
+
+    return persistLeadUpdate(updatedLead, 'Erro ao salvar nome do lead:')
+  }
+
   async function changeLeadStatus(id: string, status: LeadStatus) {
     const lead = leads.find((item) => item.id === id)
     if (!lead || lead.status === status) return
@@ -1415,6 +1436,7 @@ function App() {
         close={() => setSelectedLeadId(null)}
         moveLead={moveLead}
         registerReturn={registerReturn}
+        saveLeadName={saveLeadName}
         saveLeadNotes={saveLeadNotes}
         changeLeadStatus={changeLeadStatus}
       />
@@ -1898,26 +1920,50 @@ function StatusChart({ leads }: { leads: Lead[] }) {
   )
 }
 
-function DetailPanel({ lead, settings, close, moveLead, registerReturn, saveLeadNotes, changeLeadStatus }: {
+function DetailPanel({ lead, settings, close, moveLead, registerReturn, saveLeadName, saveLeadNotes, changeLeadStatus }: {
   lead: Lead | null
   settings: Settings
   close: () => void
   moveLead: (id: string, stage: Stage) => void
   registerReturn: (id: string) => Promise<void>
+  saveLeadName: (id: string, name: string) => Promise<boolean>
   saveLeadNotes: (id: string, notes: string) => Promise<boolean>
   changeLeadStatus: (id: string, status: LeadStatus) => Promise<void>
 }) {
   const currentStageIndex = lead ? STAGES.indexOf(lead.stage) : -1
   const returnTask = lead ? getReturnTask(lead, settings) : null
+  const [nameEditor, setNameEditor] = useState({
+    leadId: '',
+    draft: '',
+    isEditing: false,
+    isSaving: false,
+  })
   const [notesEditor, setNotesEditor] = useState({
     leadId: '',
     draft: '',
     isEditing: false,
     isSaving: false,
   })
+  const nameDraft = lead && nameEditor.leadId === lead.id ? nameEditor.draft : lead?.name || ''
+  const isEditingName = Boolean(lead && nameEditor.leadId === lead.id && nameEditor.isEditing)
+  const isSavingName = Boolean(lead && nameEditor.leadId === lead.id && nameEditor.isSaving)
   const notesDraft = lead && notesEditor.leadId === lead.id ? notesEditor.draft : lead?.notes || ''
   const isEditingNotes = Boolean(lead && notesEditor.leadId === lead.id && notesEditor.isEditing)
   const isSavingNotes = Boolean(lead && notesEditor.leadId === lead.id && notesEditor.isSaving)
+
+  async function handleSaveName(event: FormEvent) {
+    event.preventDefault()
+    if (!lead) return
+
+    setNameEditor((current) => ({ ...current, isSaving: true }))
+    const saved = await saveLeadName(lead.id, nameDraft)
+    setNameEditor({
+      leadId: lead.id,
+      draft: saved ? nameDraft.trim() : nameDraft,
+      isEditing: !saved,
+      isSaving: false,
+    })
+  }
 
   async function handleSaveNotes() {
     if (!lead) return
@@ -1932,8 +1978,51 @@ function DetailPanel({ lead, settings, close, moveLead, registerReturn, saveLead
         <>
           <div className="detail-header">
             <div className="detail-header-row">
-              <div>
-                <div className="detail-name">{lead.name}</div>
+              <div className="detail-title-block">
+                {isEditingName ? (
+                  <form className="lead-name-editor" onSubmit={(event) => void handleSaveName(event)}>
+                    <input
+                      className="lead-name-input"
+                      value={nameDraft}
+                      onChange={(event) => setNameEditor((current) => ({ ...current, draft: event.target.value }))}
+                      disabled={isSavingName}
+                      autoFocus
+                    />
+                    <div className="lead-name-actions">
+                      <button
+                        type="button"
+                        className="inline-action detail-name-action"
+                        disabled={isSavingName}
+                        onClick={() => setNameEditor({
+                          leadId: lead.id,
+                          draft: lead.name,
+                          isEditing: false,
+                          isSaving: false,
+                        })}
+                      >
+                        Cancelar
+                      </button>
+                      <button type="submit" className="inline-action detail-name-action primary" disabled={isSavingName}>
+                        {isSavingName ? 'Salvando...' : 'Salvar'}
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="detail-name-row">
+                    <div className="detail-name">{lead.name}</div>
+                    <button
+                      className="inline-action detail-name-action"
+                      onClick={() => setNameEditor({
+                        leadId: lead.id,
+                        draft: lead.name,
+                        isEditing: true,
+                        isSaving: false,
+                      })}
+                    >
+                      Editar
+                    </button>
+                  </div>
+                )}
                 <div className="detail-sub">{lead.area} · {lead.origin}</div>
               </div>
               <button className="detail-close" onClick={close}>✕</button>
