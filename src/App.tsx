@@ -6,6 +6,7 @@ import {
   activateAppUser,
   createAppUser,
   createLead,
+  deleteLeadRecord,
   deleteAppUser,
   fetchAppUsers,
   fetchLeads,
@@ -30,6 +31,8 @@ type SettingsOptionsKey = 'originOptions' | 'legalAreaOptions' | 'ownerOptions'
 type ReportStatusFilter = LeadStatus | 'all'
 type UserInviteForm = { name: string, email: string, password: string }
 type UserFeedback = { type: 'success' | 'error', message: string }
+type EditableLeadDetails = Pick<Lead, 'phone' | 'email' | 'area' | 'origin' | 'ticket' | 'owner'>
+type LeadDetailsDraft = Omit<EditableLeadDetails, 'ticket'> & { ticket: string }
 
 const emptyUserInviteForm: UserInviteForm = { name: '', email: '', password: '' }
 const hasCrmAccessRole = (role: string) => role === 'admin' || role === 'user'
@@ -64,6 +67,14 @@ const statusLabel = (status: LeadStatus) => status === 'Perdido' ? 'Arquivado' :
 const formatDate = (date?: string | null) => date ? new Intl.DateTimeFormat('pt-BR').format(new Date(date)) : '—'
 const positiveNumber = (value: string) => Math.max(0, Number(value) || 0)
 const positiveInteger = (value: string) => Math.round(positiveNumber(value))
+const leadDetailsDraft = (lead: Lead): LeadDetailsDraft => ({
+  phone: lead.phone === '—' ? '' : lead.phone,
+  email: lead.email,
+  area: lead.area,
+  origin: lead.origin,
+  ticket: String(lead.ticket || ''),
+  owner: lead.owner,
+})
 const normalizeOptions = (options: string[]) => Array.from(new Set(
   options.map((option) => option.trim()).filter(Boolean),
 ))
@@ -72,6 +83,18 @@ const activityTime = () => new Intl.DateTimeFormat('pt-BR', {
   timeStyle: 'short',
 }).format(new Date())
 const activityEntry = (action: string, userName: string) => `${action} — ${activityTime()} — ${userName || 'Sistema'}`
+const errorMessage = (error: unknown) => {
+  if (error instanceof Error && error.message) return error.message
+  if (error && typeof error === 'object' && 'message' in error) return String(error.message || '')
+  return ''
+}
+const saveErrorAlert = (message: string, error: unknown) => {
+  const detail = errorMessage(error)
+  const permissionHint = /row-level security|policy|permission denied|42501/i.test(detail)
+    ? '\n\nA sessão não foi reconhecida com permissão para esta operação. Saia e entre novamente após corrigir o perfil do administrador.'
+    : ''
+  window.alert(`${message}${detail ? `\n\nDetalhes: ${detail}` : ''}${permissionHint}`)
+}
 const dayMs = 24 * 60 * 60 * 1000
 const dateInputValue = (date: Date) => {
   const year = date.getFullYear()
@@ -182,13 +205,16 @@ function App() {
   const [activePage, setActivePage] = useState<Page>('dashboard')
   const [leads, setLeads] = useState<Lead[]>([])
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
+  const [settingsDraft, setSettingsDraft] = useState<Settings>(DEFAULT_SETTINGS)
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [currentFilter, setCurrentFilter] = useState<LeadFilter>('all')
+  const [leadOwnerFilter, setLeadOwnerFilter] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [form, setForm] = useState<LeadInsert>(emptyForm)
   const [draggedId, setDraggedId] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [deletingLeadId, setDeletingLeadId] = useState<string | null>(null)
   const [reportStartDate, setReportStartDate] = useState(monthStartInput)
   const [reportEndDate, setReportEndDate] = useState(todayInput)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -196,6 +222,7 @@ function App() {
   const [loginForm, setLoginForm] = useState({ email: '', password: '' })
   const [loginError, setLoginError] = useState('')
   const [isLoggingIn, setIsLoggingIn] = useState(false)
+  const [isSavingSettings, setIsSavingSettings] = useState(false)
   const [originDraft, setOriginDraft] = useState('')
   const [areaDraft, setAreaDraft] = useState('')
   const [ownerDraft, setOwnerDraft] = useState('')
@@ -269,6 +296,8 @@ function App() {
         setManagedUsers([])
         setUserPasswordDrafts({})
         setUserManagementFeedback(null)
+        setLeadOwnerFilter('all')
+        setReportOwner('all')
         setDataError('')
         setIsLoadingData(false)
       }
@@ -283,6 +312,7 @@ function App() {
   useEffect(() => {
     if (!isAuthenticated) return
     if (!hasSupabaseConfig) return
+    if (!currentUserRole) return
 
     let cancelled = false
 
@@ -290,14 +320,18 @@ function App() {
       setIsLoadingData(true)
       setDataError('')
       try {
+        const scopedOwner = currentUserRole === 'admin' ? undefined : currentUserName
         const [databaseLeads, databaseSettings] = await Promise.all([
-          fetchLeads(),
+          fetchLeads(scopedOwner),
           fetchSettings(),
         ])
 
         if (!cancelled) {
           setLeads(databaseLeads)
-          if (databaseSettings) setSettings(databaseSettings)
+          if (databaseSettings) {
+            setSettings(databaseSettings)
+            setSettingsDraft(databaseSettings)
+          }
         }
       } catch (error) {
         console.error('Erro ao carregar dados do Supabase:', error)
@@ -315,7 +349,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [dataReloadKey, isAuthenticated])
+  }, [currentUserName, currentUserRole, dataReloadKey, isAuthenticated])
 
   useEffect(() => {
     if (!isAuthenticated || !isAdmin || activePage !== 'config') return
@@ -385,10 +419,12 @@ function App() {
     return options.length ? options : DEFAULT_SETTINGS.legalAreaOptions
   }, [form.area, settings.legalAreaOptions])
   const ownerOptions = useMemo(() => {
+    if (!isAdmin) return currentUserName ? [currentUserName] : []
+
     const options = normalizeOptions(settings.ownerOptions)
     if (form.owner && !options.includes(form.owner)) options.unshift(form.owner)
     return options.length ? options : DEFAULT_SETTINGS.ownerOptions
-  }, [form.owner, settings.ownerOptions])
+  }, [currentUserName, form.owner, isAdmin, settings.ownerOptions])
   const reportOwnerOptions = useMemo(
     () => normalizeOptions([...settings.ownerOptions, ...leads.map((lead) => lead.owner)]),
     [leads, settings.ownerOptions],
@@ -404,6 +440,9 @@ function App() {
 
   const filteredLeads = useMemo(() => {
     let filtered = [...leads]
+    if (isAdmin && leadOwnerFilter !== 'all') {
+      filtered = filtered.filter((lead) => lead.owner === leadOwnerFilter)
+    }
     if (currentFilter !== 'all') {
       filtered = STAGES.includes(currentFilter as Stage)
         ? filtered.filter((lead) => lead.stage === currentFilter)
@@ -418,13 +457,14 @@ function App() {
           lead.email.toLowerCase().includes(query) ||
           lead.area.toLowerCase().includes(query) ||
           lead.origin.toLowerCase().includes(query) ||
+          lead.owner.toLowerCase().includes(query) ||
           lead.status.toLowerCase().includes(query) ||
           statusLabel(lead.status).toLowerCase().includes(query) ||
           returnTaskText(lead, settings).toLowerCase().includes(query),
       )
     }
     return filtered
-  }, [currentFilter, leads, searchQuery, settings])
+  }, [currentFilter, isAdmin, leadOwnerFilter, leads, searchQuery, settings])
 
   const alerts = useMemo(() => {
     return activeLeads.flatMap((lead) => {
@@ -467,20 +507,33 @@ function App() {
     const option = draft.trim()
     if (!option) return
 
-    const nextOptions = normalizeOptions([...settings[key], option])
-    setSettings({ ...settings, [key]: nextOptions })
+    setSettingsDraft((current) => ({
+      ...current,
+      [key]: normalizeOptions([...current[key], option]),
+    }))
     clearDraft('')
   }
 
   function updateSettingsOption(key: SettingsOptionsKey, index: number, value: string) {
-    const nextOptions = [...settings[key]]
-    nextOptions[index] = value
-    setSettings({ ...settings, [key]: nextOptions })
+    setSettingsDraft((current) => {
+      const nextOptions = [...current[key]]
+      nextOptions[index] = value
+      return { ...current, [key]: nextOptions }
+    })
   }
 
   function removeSettingsOption(key: SettingsOptionsKey, index: number) {
-    const nextOptions = settings[key].filter((_option, optionIndex) => optionIndex !== index)
-    setSettings({ ...settings, [key]: nextOptions })
+    setSettingsDraft((current) => ({
+      ...current,
+      [key]: current[key].filter((_option, optionIndex) => optionIndex !== index),
+    }))
+  }
+
+  function discardSettingsChanges() {
+    setSettingsDraft(settings)
+    setOriginDraft('')
+    setAreaDraft('')
+    setOwnerDraft('')
   }
 
   async function handleLogin(event: FormEvent) {
@@ -533,28 +586,34 @@ function App() {
     setSelectedLeadId(null)
     setActivePage('dashboard')
     setCurrentUserRole('')
+    setLeadOwnerFilter('all')
+    setReportOwner('all')
   }
 
   function openModal(initialStage: Stage = '1º Contato') {
     const configuredOrigins = normalizeOptions(settings.originOptions)
     const configuredAreas = normalizeOptions(settings.legalAreaOptions)
     const configuredOwners = normalizeOptions(settings.ownerOptions)
+    let defaultOwner = currentUserName
+    if (isAdmin) {
+      defaultOwner = leadOwnerFilter !== 'all' ? leadOwnerFilter : configuredOwners[0] || settings.ownerName
+    }
     setForm({
       ...emptyForm,
       origin: configuredOrigins[0] || emptyForm.origin,
       area: configuredAreas[0] || emptyForm.area,
       stage: initialStage,
-      owner: configuredOwners[0] || settings.ownerName,
+      owner: defaultOwner,
       status: 'Ativo',
     })
     setIsModalOpen(true)
   }
 
-  async function persistLeadUpdate(updatedLead: Lead, errorLabel: string) {
+  async function persistLeadUpdate(updatedLead: Lead, errorLabel: string, returnUpdatedRecord = true) {
     const previousLead = leads.find((item) => item.id === updatedLead.id)
     setLeads((current) => current.map((item) => (item.id === updatedLead.id ? updatedLead : item)))
     try {
-      const databaseLead = await updateLeadRecord(updatedLead)
+      const databaseLead = await updateLeadRecord(updatedLead, returnUpdatedRecord)
       if (databaseLead) {
         setLeads((current) => current.map((item) => (item.id === updatedLead.id ? databaseLead : item)))
       }
@@ -564,7 +623,7 @@ function App() {
       if (previousLead) {
         setLeads((current) => current.map((item) => (item.id === previousLead.id ? previousLead : item)))
       }
-      window.alert('Não foi possível salvar a alteração no Supabase.')
+      saveErrorAlert('Não foi possível salvar a alteração no Supabase.', error)
       return false
     }
   }
@@ -596,7 +655,7 @@ function App() {
       setForm(emptyForm)
     } catch (error) {
       console.error('Erro ao salvar lead:', error)
-      window.alert('Não foi possível salvar no Supabase. Confira as variáveis e a tabela leads.')
+      saveErrorAlert('Não foi possível salvar o lead no Supabase.', error)
     } finally {
       setIsSaving(false)
     }
@@ -672,6 +731,69 @@ function App() {
     return persistLeadUpdate(updatedLead, 'Erro ao salvar nome do lead:')
   }
 
+  async function saveLeadDetails(id: string, details: EditableLeadDetails) {
+    const lead = leads.find((item) => item.id === id)
+    if (!lead) return false
+
+    const nextDetails: EditableLeadDetails = {
+      phone: details.phone.trim() || '—',
+      email: details.email.trim(),
+      area: details.area.trim(),
+      origin: details.origin.trim(),
+      ticket: positiveInteger(String(details.ticket)),
+      owner: details.owner.trim(),
+    }
+
+    if (!nextDetails.area || !nextDetails.origin || !nextDetails.owner) {
+      window.alert('Preencha a área jurídica, a origem e o responsável.')
+      return false
+    }
+
+    const changes: string[] = []
+    if (lead.phone !== nextDetails.phone) {
+      changes.push(`Telefone atualizado de "${lead.phone || '—'}" para "${nextDetails.phone}"`)
+    }
+    if (lead.email !== nextDetails.email) {
+      changes.push(`E-mail atualizado de "${lead.email || '—'}" para "${nextDetails.email || '—'}"`)
+    }
+    if (lead.area !== nextDetails.area) {
+      changes.push(`Área jurídica atualizada de "${lead.area}" para "${nextDetails.area}"`)
+    }
+    if (lead.origin !== nextDetails.origin) {
+      changes.push(`Origem atualizada de "${lead.origin}" para "${nextDetails.origin}"`)
+    }
+    if (lead.ticket !== nextDetails.ticket) {
+      changes.push(`Ticket estimado atualizado de "${currency(lead.ticket)}" para "${currency(nextDetails.ticket)}"`)
+    }
+    if (lead.owner !== nextDetails.owner) {
+      changes.push(`Responsável atualizado de "${lead.owner}" para "${nextDetails.owner}"`)
+    }
+
+    if (!changes.length) return true
+
+    const ownerWasTransferred = lead.owner.toLocaleLowerCase('pt-BR') !== nextDetails.owner.toLocaleLowerCase('pt-BR')
+    const userKeepsAccess = isAdmin || nextDetails.owner.toLocaleLowerCase('pt-BR') === currentUserName.trim().toLocaleLowerCase('pt-BR')
+    const updatedLead = {
+      ...lead,
+      ...nextDetails,
+      activity: [...changes.map((change) => activityEntry(change, currentUserName)), ...lead.activity],
+    }
+
+    const saved = await persistLeadUpdate(
+      updatedLead,
+      'Erro ao salvar informações do lead:',
+      !ownerWasTransferred || userKeepsAccess,
+    )
+
+    if (saved && !userKeepsAccess) {
+      setLeads((current) => current.filter((item) => item.id !== id))
+      setSelectedLeadId(null)
+      window.alert(`Lead transferido para ${nextDetails.owner}.`)
+    }
+
+    return saved
+  }
+
   async function changeLeadStatus(id: string, status: LeadStatus) {
     const lead = leads.find((item) => item.id === id)
     if (!lead || lead.status === status) return
@@ -695,39 +817,71 @@ function App() {
     await persistLeadUpdate(updatedLead, 'Erro ao alterar status:')
   }
 
-  async function handleSaveSettings() {
+  async function deleteLead(id: string) {
+    if (!isAdmin) {
+      window.alert('Apenas administradores podem excluir leads.')
+      return false
+    }
+
+    const lead = leads.find((item) => item.id === id)
+    if (!lead) return false
+    if (!window.confirm(`Excluir permanentemente o lead "${lead.name}"? Esta ação não pode ser desfeita.`)) {
+      return false
+    }
+
+    setDeletingLeadId(id)
     try {
-      const firmName = settings.firmName.trim()
-      const ownerName = settings.ownerName.trim()
-      const originOptions = normalizeOptions(settings.originOptions)
-      const legalAreaOptions = normalizeOptions(settings.legalAreaOptions)
-      const ownerOptions = normalizeOptions([...settings.ownerOptions, ownerName])
+      await deleteLeadRecord(id)
+      setLeads((current) => current.filter((item) => item.id !== id))
+      setSelectedLeadId(null)
+      return true
+    } catch (error) {
+      console.error('Erro ao excluir lead:', error)
+      saveErrorAlert('Não foi possível excluir o lead no Supabase.', error)
+      return false
+    } finally {
+      setDeletingLeadId(null)
+    }
+  }
 
-      if (!firmName || !ownerName || !originOptions.length || !legalAreaOptions.length || !ownerOptions.length) {
-        window.alert('Preencha o escritório, o responsável e mantenha ao menos uma opção em cada lista.')
-        return
-      }
+  async function handleSaveSettings() {
+    const firmName = settingsDraft.firmName.trim()
+    const ownerName = settingsDraft.ownerName.trim()
+    const originOptions = normalizeOptions(settingsDraft.originOptions)
+    const legalAreaOptions = normalizeOptions(settingsDraft.legalAreaOptions)
+    const ownerOptions = normalizeOptions([...settingsDraft.ownerOptions, ownerName])
 
-      const normalizedSettings = {
-        ...settings,
-        firmName,
-        ownerName,
-        monthlyProtocolGoal: positiveInteger(String(settings.monthlyProtocolGoal)),
-        minimumTicket: positiveInteger(String(settings.minimumTicket)),
-        conversionGoal: Math.min(100, positiveInteger(String(settings.conversionGoal))),
-        firstContactReturnDays: positiveInteger(String(settings.firstContactReturnDays)),
-        secondContactReturnDays: positiveInteger(String(settings.secondContactReturnDays)),
-        thirdContactReturnDays: positiveInteger(String(settings.thirdContactReturnDays)),
-        originOptions,
-        legalAreaOptions,
-        ownerOptions,
-      }
+    if (!firmName || !ownerName || !originOptions.length || !legalAreaOptions.length || !ownerOptions.length) {
+      window.alert('Preencha o escritório, o responsável e mantenha ao menos uma opção em cada lista.')
+      return
+    }
+
+    const normalizedSettings = {
+      ...settingsDraft,
+      firmName,
+      ownerName,
+      monthlyProtocolGoal: positiveInteger(String(settingsDraft.monthlyProtocolGoal)),
+      minimumTicket: positiveInteger(String(settingsDraft.minimumTicket)),
+      conversionGoal: Math.min(100, positiveInteger(String(settingsDraft.conversionGoal))),
+      firstContactReturnDays: positiveInteger(String(settingsDraft.firstContactReturnDays)),
+      secondContactReturnDays: positiveInteger(String(settingsDraft.secondContactReturnDays)),
+      thirdContactReturnDays: positiveInteger(String(settingsDraft.thirdContactReturnDays)),
+      originOptions,
+      legalAreaOptions,
+      ownerOptions,
+    }
+
+    setIsSavingSettings(true)
+    try {
       const databaseSettings = await saveSettings(normalizedSettings)
       setSettings(databaseSettings)
+      setSettingsDraft(databaseSettings)
       window.alert('Configurações salvas.')
     } catch (error) {
       console.error('Erro ao salvar configurações:', error)
-      window.alert('Não foi possível salvar as configurações no Supabase.')
+      saveErrorAlert('Não foi possível salvar as configurações no Supabase.', error)
+    } finally {
+      setIsSavingSettings(false)
     }
   }
 
@@ -1058,6 +1212,15 @@ function App() {
                         onChange={(event) => setSearchQuery(event.target.value)}
                       />
                     </div>
+                    {isAdmin && (
+                      <label className="owner-filter">
+                        <span>Responsavel</span>
+                        <select value={leadOwnerFilter} onChange={(event) => setLeadOwnerFilter(event.target.value)}>
+                          <option value="all">Todos</option>
+                          {reportOwnerOptions.map((owner) => <option key={owner} value={owner}>{owner}</option>)}
+                        </select>
+                      </label>
+                    )}
                     <div className="filter-chips">
                       <button className={`chip ${currentFilter === 'all' ? 'active' : ''}`} onClick={() => setCurrentFilter('all')}>Todos</button>
                       <button className={`chip ${currentFilter === 'Ativo' ? 'active' : ''}`} onClick={() => setCurrentFilter('Ativo')}>Ativos</button>
@@ -1092,13 +1255,15 @@ function App() {
                       <span>Fim</span>
                       <input type="date" value={reportEndDate} onChange={(event) => setReportEndDate(event.target.value)} />
                     </label>
-                    <label className="date-filter">
-                      <span>Responsável</span>
-                      <select value={reportOwner} onChange={(event) => setReportOwner(event.target.value)}>
-                        <option value="all">Todos</option>
-                        {reportOwnerOptions.map((owner) => <option key={owner} value={owner}>{owner}</option>)}
-                      </select>
-                    </label>
+                    {isAdmin && (
+                      <label className="date-filter">
+                        <span>Responsável</span>
+                        <select value={reportOwner} onChange={(event) => setReportOwner(event.target.value)}>
+                          <option value="all">Todos</option>
+                          {reportOwnerOptions.map((owner) => <option key={owner} value={owner}>{owner}</option>)}
+                        </select>
+                      </label>
+                    )}
                     <label className="date-filter">
                       <span>Área</span>
                       <select value={reportArea} onChange={(event) => setReportArea(event.target.value)}>
@@ -1200,53 +1365,56 @@ function App() {
                 <div className="config-form">
                   <label className="form-group">
                     <span className="form-label">Nome do Escritório</span>
-                    <input className="form-input" value={settings.firmName} onChange={(event) => setSettings({ ...settings, firmName: event.target.value })} />
+                    <input className="form-input" value={settingsDraft.firmName} onChange={(event) => setSettingsDraft({ ...settingsDraft, firmName: event.target.value })} disabled={isSavingSettings} />
                   </label>
                   <label className="form-group">
                     <span className="form-label">Advogado Responsável</span>
-                    <input className="form-input" value={settings.ownerName} onChange={(event) => setSettings({ ...settings, ownerName: event.target.value })} />
+                    <input className="form-input" value={settingsDraft.ownerName} onChange={(event) => setSettingsDraft({ ...settingsDraft, ownerName: event.target.value })} disabled={isSavingSettings} />
                   </label>
                   <label className="form-group">
                     <span className="form-label">Meta de Protocolos / Mês</span>
-                    <input className="form-input" type="number" min="0" step="1" value={settings.monthlyProtocolGoal} onChange={(event) => setSettings({ ...settings, monthlyProtocolGoal: positiveInteger(event.target.value) })} />
+                    <input className="form-input" type="number" min="0" step="1" value={settingsDraft.monthlyProtocolGoal} onChange={(event) => setSettingsDraft({ ...settingsDraft, monthlyProtocolGoal: positiveInteger(event.target.value) })} disabled={isSavingSettings} />
                   </label>
                   <label className="form-group">
                     <span className="form-label">Ticket Médio Mínimo (R$)</span>
-                    <input className="form-input" type="number" min="0" step="1" value={settings.minimumTicket} onChange={(event) => setSettings({ ...settings, minimumTicket: positiveInteger(event.target.value) })} />
+                    <input className="form-input" type="number" min="0" step="1" value={settingsDraft.minimumTicket} onChange={(event) => setSettingsDraft({ ...settingsDraft, minimumTicket: positiveInteger(event.target.value) })} disabled={isSavingSettings} />
                   </label>
                   <label className="form-group">
                     <span className="form-label">Meta de Conversão (%)</span>
-                    <input className="form-input" type="number" min="0" max="100" step="1" value={settings.conversionGoal} onChange={(event) => setSettings({ ...settings, conversionGoal: Math.min(100, positiveInteger(event.target.value)) })} />
+                    <input className="form-input" type="number" min="0" max="100" step="1" value={settingsDraft.conversionGoal} onChange={(event) => setSettingsDraft({ ...settingsDraft, conversionGoal: Math.min(100, positiveInteger(event.target.value)) })} disabled={isSavingSettings} />
                   </label>
                   <ConfigOptionsSection
                     title="Origens do Lead"
-                    options={settings.originOptions}
+                    options={settingsDraft.originOptions}
                     draft={originDraft}
                     placeholder="Nova origem"
                     onDraftChange={setOriginDraft}
                     onAdd={() => addSettingsOption('originOptions', originDraft, setOriginDraft)}
                     onUpdate={(index, value) => updateSettingsOption('originOptions', index, value)}
                     onRemove={(index) => removeSettingsOption('originOptions', index)}
+                    disabled={isSavingSettings}
                   />
                   <ConfigOptionsSection
                     title="Áreas Jurídicas"
-                    options={settings.legalAreaOptions}
+                    options={settingsDraft.legalAreaOptions}
                     draft={areaDraft}
                     placeholder="Nova área jurídica"
                     onDraftChange={setAreaDraft}
                     onAdd={() => addSettingsOption('legalAreaOptions', areaDraft, setAreaDraft)}
                     onUpdate={(index, value) => updateSettingsOption('legalAreaOptions', index, value)}
                     onRemove={(index) => removeSettingsOption('legalAreaOptions', index)}
+                    disabled={isSavingSettings}
                   />
                   <ConfigOptionsSection
                     title="Responsáveis do Formulário"
-                    options={settings.ownerOptions}
+                    options={settingsDraft.ownerOptions}
                     draft={ownerDraft}
                     placeholder="Novo responsável"
                     onDraftChange={setOwnerDraft}
                     onAdd={() => addSettingsOption('ownerOptions', ownerDraft, setOwnerDraft)}
                     onUpdate={(index, value) => updateSettingsOption('ownerOptions', index, value)}
                     onRemove={(index) => removeSettingsOption('ownerOptions', index)}
+                    disabled={isSavingSettings}
                   />
                   <div className="config-section">
                     <div className="config-section-title">Automação de Retorno</div>
@@ -1258,8 +1426,9 @@ function App() {
                           type="number"
                           min="0"
                           step="1"
-                          value={settings.firstContactReturnDays}
-                          onChange={(event) => setSettings({ ...settings, firstContactReturnDays: positiveInteger(event.target.value) })}
+                          value={settingsDraft.firstContactReturnDays}
+                          onChange={(event) => setSettingsDraft({ ...settingsDraft, firstContactReturnDays: positiveInteger(event.target.value) })}
+                          disabled={isSavingSettings}
                         />
                       </label>
                       <label className="form-group">
@@ -1269,8 +1438,9 @@ function App() {
                           type="number"
                           min="0"
                           step="1"
-                          value={settings.secondContactReturnDays}
-                          onChange={(event) => setSettings({ ...settings, secondContactReturnDays: positiveInteger(event.target.value) })}
+                          value={settingsDraft.secondContactReturnDays}
+                          onChange={(event) => setSettingsDraft({ ...settingsDraft, secondContactReturnDays: positiveInteger(event.target.value) })}
+                          disabled={isSavingSettings}
                         />
                       </label>
                     </div>
@@ -1281,13 +1451,25 @@ function App() {
                         type="number"
                         min="0"
                         step="1"
-                        value={settings.thirdContactReturnDays}
-                        onChange={(event) => setSettings({ ...settings, thirdContactReturnDays: positiveInteger(event.target.value) })}
+                        value={settingsDraft.thirdContactReturnDays}
+                        onChange={(event) => setSettingsDraft({ ...settingsDraft, thirdContactReturnDays: positiveInteger(event.target.value) })}
+                        disabled={isSavingSettings}
                       />
                     </label>
                     <div className="config-hint">Use 0 para desativar a tarefa automática de uma etapa.</div>
                   </div>
-                  <button className="btn btn-gold config-save" onClick={handleSaveSettings}>Salvar Configurações</button>
+                  <div className="config-actions">
+                    <button
+                      className="btn btn-outline"
+                      onClick={discardSettingsChanges}
+                      disabled={isSavingSettings}
+                    >
+                      Descartar alterações
+                    </button>
+                    <button className="btn btn-gold config-save" onClick={handleSaveSettings} disabled={isSavingSettings}>
+                      {isSavingSettings ? 'Salvando...' : 'Salvar Configurações'}
+                    </button>
+                  </div>
                   <form className="config-section user-create-form" onSubmit={(event) => void handleCreateUser(event)}>
                     <div className="config-section-title">Usuários do Sistema</div>
                     <div className="form-row">
@@ -1411,7 +1593,7 @@ function App() {
               </label>
               <label className="form-group">
                 <span className="form-label">Responsável</span>
-                <select className="form-select" value={form.owner} onChange={(event) => setForm({ ...form, owner: event.target.value })}>
+                <select className="form-select" value={form.owner} onChange={(event) => setForm({ ...form, owner: event.target.value })} disabled={!isAdmin}>
                   {ownerOptions.map((owner) => <option key={owner}>{owner}</option>)}
                 </select>
               </label>
@@ -1437,8 +1619,12 @@ function App() {
         moveLead={moveLead}
         registerReturn={registerReturn}
         saveLeadName={saveLeadName}
+        saveLeadDetails={saveLeadDetails}
         saveLeadNotes={saveLeadNotes}
         changeLeadStatus={changeLeadStatus}
+        canDelete={isAdmin}
+        isDeleting={Boolean(selectedLead && deletingLeadId === selectedLead.id)}
+        deleteLead={deleteLead}
       />
     </>
   )
@@ -1492,7 +1678,7 @@ function LoginScreen({ firmName, loginForm, loginError, isLoggingIn, setLoginFor
   )
 }
 
-function ConfigOptionsSection({ title, options, draft, placeholder, onDraftChange, onAdd, onUpdate, onRemove }: {
+function ConfigOptionsSection({ title, options, draft, placeholder, onDraftChange, onAdd, onUpdate, onRemove, disabled }: {
   title: string
   options: string[]
   draft: string
@@ -1501,6 +1687,7 @@ function ConfigOptionsSection({ title, options, draft, placeholder, onDraftChang
   onAdd: () => void
   onUpdate: (index: number, value: string) => void
   onRemove: (index: number) => void
+  disabled?: boolean
 }) {
   return (
     <div className="config-section">
@@ -1512,8 +1699,9 @@ function ConfigOptionsSection({ title, options, draft, placeholder, onDraftChang
               className="form-input"
               value={option}
               onChange={(event) => onUpdate(index, event.target.value)}
+              disabled={disabled}
             />
-            <button className="btn btn-outline" onClick={() => onRemove(index)}>Remover</button>
+            <button className="btn btn-outline" onClick={() => onRemove(index)} disabled={disabled}>Remover</button>
           </div>
         ))}
       </div>
@@ -1529,8 +1717,9 @@ function ConfigOptionsSection({ title, options, draft, placeholder, onDraftChang
             }
           }}
           placeholder={placeholder}
+          disabled={disabled}
         />
-        <button className="btn btn-outline" onClick={onAdd}>Adicionar</button>
+        <button className="btn btn-outline" onClick={onAdd} disabled={disabled}>Adicionar</button>
       </div>
     </div>
   )
@@ -1920,15 +2109,19 @@ function StatusChart({ leads }: { leads: Lead[] }) {
   )
 }
 
-function DetailPanel({ lead, settings, close, moveLead, registerReturn, saveLeadName, saveLeadNotes, changeLeadStatus }: {
+function DetailPanel({ lead, settings, close, moveLead, registerReturn, saveLeadName, saveLeadDetails, saveLeadNotes, changeLeadStatus, canDelete, isDeleting, deleteLead }: {
   lead: Lead | null
   settings: Settings
   close: () => void
   moveLead: (id: string, stage: Stage) => void
   registerReturn: (id: string) => Promise<void>
   saveLeadName: (id: string, name: string) => Promise<boolean>
+  saveLeadDetails: (id: string, details: EditableLeadDetails) => Promise<boolean>
   saveLeadNotes: (id: string, notes: string) => Promise<boolean>
   changeLeadStatus: (id: string, status: LeadStatus) => Promise<void>
+  canDelete: boolean
+  isDeleting: boolean
+  deleteLead: (id: string) => Promise<boolean>
 }) {
   const currentStageIndex = lead ? STAGES.indexOf(lead.stage) : -1
   const returnTask = lead ? getReturnTask(lead, settings) : null
@@ -1944,12 +2137,29 @@ function DetailPanel({ lead, settings, close, moveLead, registerReturn, saveLead
     isEditing: false,
     isSaving: false,
   })
+  const [detailsEditor, setDetailsEditor] = useState<{
+    leadId: string
+    draft: LeadDetailsDraft
+    isEditing: boolean
+    isSaving: boolean
+  }>({
+    leadId: '',
+    draft: { phone: '', email: '', area: '', origin: '', ticket: '', owner: '' },
+    isEditing: false,
+    isSaving: false,
+  })
   const nameDraft = lead && nameEditor.leadId === lead.id ? nameEditor.draft : lead?.name || ''
   const isEditingName = Boolean(lead && nameEditor.leadId === lead.id && nameEditor.isEditing)
   const isSavingName = Boolean(lead && nameEditor.leadId === lead.id && nameEditor.isSaving)
   const notesDraft = lead && notesEditor.leadId === lead.id ? notesEditor.draft : lead?.notes || ''
   const isEditingNotes = Boolean(lead && notesEditor.leadId === lead.id && notesEditor.isEditing)
   const isSavingNotes = Boolean(lead && notesEditor.leadId === lead.id && notesEditor.isSaving)
+  const detailsDraft = lead && detailsEditor.leadId === lead.id ? detailsEditor.draft : lead ? leadDetailsDraft(lead) : detailsEditor.draft
+  const isEditingDetails = Boolean(lead && detailsEditor.leadId === lead.id && detailsEditor.isEditing)
+  const isSavingDetails = Boolean(lead && detailsEditor.leadId === lead.id && detailsEditor.isSaving)
+  const detailAreaOptions = normalizeOptions([...settings.legalAreaOptions, lead?.area || ''])
+  const detailOriginOptions = normalizeOptions([...settings.originOptions, lead?.origin || ''])
+  const detailOwnerOptions = normalizeOptions([...settings.ownerOptions, lead?.owner || ''])
 
   async function handleSaveName(event: FormEvent) {
     event.preventDefault()
@@ -1970,6 +2180,23 @@ function DetailPanel({ lead, settings, close, moveLead, registerReturn, saveLead
     setNotesEditor((current) => ({ ...current, isSaving: true }))
     const saved = await saveLeadNotes(lead.id, notesDraft)
     setNotesEditor({ leadId: lead.id, draft: notesDraft, isEditing: !saved, isSaving: false })
+  }
+
+  async function handleSaveDetails(event: FormEvent) {
+    event.preventDefault()
+    if (!lead) return
+
+    setDetailsEditor((current) => ({ ...current, isSaving: true }))
+    const saved = await saveLeadDetails(lead.id, {
+      ...detailsDraft,
+      ticket: positiveInteger(detailsDraft.ticket),
+    })
+    setDetailsEditor({
+      leadId: lead.id,
+      draft: detailsDraft,
+      isEditing: !saved,
+      isSaving: false,
+    })
   }
 
   return (
@@ -2043,13 +2270,139 @@ function DetailPanel({ lead, settings, close, moveLead, registerReturn, saveLead
 
           <div className="detail-body">
             <div className="detail-section">
-              <div className="detail-section-title">Informações</div>
-              <DetailField label="Telefone" value={lead.phone} />
-              <DetailField label="E-mail" value={lead.email || '—'} />
-              <DetailField label="Área Jurídica" value={lead.area} />
-              <DetailField label="Origem" value={lead.origin} />
-              <DetailField label="Ticket Estimado" value={currency(lead.ticket)} accent />
-              <DetailField label="Responsável" value={lead.owner} />
+              <div className="detail-section-heading">
+                <div className="detail-section-title">Informações</div>
+                {!isEditingDetails && (
+                  <button
+                    className="inline-action"
+                    onClick={() => setDetailsEditor({
+                      leadId: lead.id,
+                      draft: leadDetailsDraft(lead),
+                      isEditing: true,
+                      isSaving: false,
+                    })}
+                  >
+                    Editar
+                  </button>
+                )}
+              </div>
+              {isEditingDetails ? (
+                <form className="lead-details-editor" onSubmit={(event) => void handleSaveDetails(event)}>
+                  <label className="form-group">
+                    <span className="form-label">Telefone</span>
+                    <input
+                      className="form-input"
+                      type="tel"
+                      value={detailsDraft.phone}
+                      onChange={(event) => setDetailsEditor((current) => ({
+                        ...current,
+                        draft: { ...current.draft, phone: event.target.value },
+                      }))}
+                      disabled={isSavingDetails}
+                    />
+                  </label>
+                  <label className="form-group">
+                    <span className="form-label">E-mail</span>
+                    <input
+                      className="form-input"
+                      type="email"
+                      value={detailsDraft.email}
+                      onChange={(event) => setDetailsEditor((current) => ({
+                        ...current,
+                        draft: { ...current.draft, email: event.target.value },
+                      }))}
+                      disabled={isSavingDetails}
+                    />
+                  </label>
+                  <label className="form-group">
+                    <span className="form-label">Área Jurídica</span>
+                    <select
+                      className="form-select"
+                      value={detailsDraft.area}
+                      onChange={(event) => setDetailsEditor((current) => ({
+                        ...current,
+                        draft: { ...current.draft, area: event.target.value },
+                      }))}
+                      disabled={isSavingDetails}
+                      required
+                    >
+                      {detailAreaOptions.map((area) => <option key={area}>{area}</option>)}
+                    </select>
+                  </label>
+                  <label className="form-group">
+                    <span className="form-label">Origem</span>
+                    <select
+                      className="form-select"
+                      value={detailsDraft.origin}
+                      onChange={(event) => setDetailsEditor((current) => ({
+                        ...current,
+                        draft: { ...current.draft, origin: event.target.value },
+                      }))}
+                      disabled={isSavingDetails}
+                      required
+                    >
+                      {detailOriginOptions.map((origin) => <option key={origin}>{origin}</option>)}
+                    </select>
+                  </label>
+                  <label className="form-group">
+                    <span className="form-label">Ticket Estimado</span>
+                    <input
+                      className="form-input"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={detailsDraft.ticket}
+                      onChange={(event) => setDetailsEditor((current) => ({
+                        ...current,
+                        draft: { ...current.draft, ticket: event.target.value },
+                      }))}
+                      disabled={isSavingDetails}
+                    />
+                  </label>
+                  <label className="form-group">
+                    <span className="form-label">Responsável</span>
+                    <select
+                      className="form-select"
+                      value={detailsDraft.owner}
+                      onChange={(event) => setDetailsEditor((current) => ({
+                        ...current,
+                        draft: { ...current.draft, owner: event.target.value },
+                      }))}
+                      disabled={isSavingDetails}
+                      required
+                    >
+                      {detailOwnerOptions.map((owner) => <option key={owner}>{owner}</option>)}
+                    </select>
+                  </label>
+                  <div className="lead-details-actions">
+                    <button
+                      type="button"
+                      className="btn btn-outline"
+                      disabled={isSavingDetails}
+                      onClick={() => setDetailsEditor({
+                        leadId: lead.id,
+                        draft: leadDetailsDraft(lead),
+                        isEditing: false,
+                        isSaving: false,
+                      })}
+                    >
+                      Cancelar
+                    </button>
+                    <button type="submit" className="btn btn-gold" disabled={isSavingDetails}>
+                      {isSavingDetails ? 'Salvando...' : 'Salvar informações'}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <>
+                  <DetailField label="Telefone" value={lead.phone} />
+                  <DetailField label="E-mail" value={lead.email || '—'} />
+                  <DetailField label="Área Jurídica" value={lead.area} />
+                  <DetailField label="Origem" value={lead.origin} />
+                  <DetailField label="Ticket Estimado" value={currency(lead.ticket)} accent />
+                  <DetailField label="Responsável" value={lead.owner} />
+                </>
+              )}
               <DetailField label="Dias no funil" value={`${getFunnelDays(lead)} dias no funil`} />
               <DetailField label="Dias na etapa" value={`${getStageDays(lead)} dias na etapa`} />
               {returnTask && <DetailField label="Tarefa" value="Retorno pendente" accent />}
@@ -2141,6 +2494,11 @@ function DetailPanel({ lead, settings, close, moveLead, registerReturn, saveLead
           </div>
 
           <div className="detail-footer">
+            {canDelete && (
+              <button className="btn btn-danger" disabled={isDeleting} onClick={() => void deleteLead(lead.id)}>
+                {isDeleting ? 'Excluindo...' : 'Excluir lead'}
+              </button>
+            )}
             {isActiveLead(lead) ? (
               <>
                 {returnTask && <button className="btn btn-primary" onClick={() => void registerReturn(lead.id)}>Registrar retorno</button>}

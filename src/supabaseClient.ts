@@ -96,13 +96,17 @@ const mapSettingsFromDatabase = (settings: DatabaseSettings): Settings => ({
   ownerOptions: settings.owner_options?.length ? settings.owner_options : DEFAULT_SETTINGS.ownerOptions,
 })
 
-export async function fetchLeads() {
+export async function fetchLeads(owner?: string) {
   const client = requireSupabase()
-
-  const { data, error } = await client
+  let query = client
     .from('leads')
     .select('*')
-    .order('created_at', { ascending: false })
+
+  if (owner?.trim()) {
+    query = query.eq('owner', owner.trim())
+  }
+
+  const { data, error } = await query.order('created_at', { ascending: false })
 
   if (error) throw error
   return (data as DatabaseLead[]).map(mapLeadFromDatabase)
@@ -121,8 +125,18 @@ export async function createLead(lead: LeadInsert) {
   return mapLeadFromDatabase(data as DatabaseLead)
 }
 
-export async function updateLeadRecord(lead: Lead) {
+export async function updateLeadRecord(lead: Lead, returnUpdatedRecord = true) {
   const client = requireSupabase()
+
+  if (!returnUpdatedRecord) {
+    const { error } = await client
+      .from('leads')
+      .update(mapLeadToDatabase(lead))
+      .eq('id', lead.id)
+
+    if (error) throw error
+    return lead
+  }
 
   const { data, error } = await client
     .from('leads')
@@ -133,6 +147,18 @@ export async function updateLeadRecord(lead: Lead) {
 
   if (error) throw error
   return mapLeadFromDatabase(data as DatabaseLead)
+}
+
+export async function deleteLeadRecord(id: string) {
+  const client = requireSupabase()
+
+  const { error, count } = await client
+    .from('leads')
+    .delete({ count: 'exact' })
+    .eq('id', id)
+
+  if (error) throw error
+  if (count !== 1) throw new Error('O lead não foi excluído ou sua sessão não possui permissão.')
 }
 
 export async function getCurrentSession() {
@@ -151,8 +177,7 @@ export function getSessionUserLabel(session: Awaited<ReturnType<typeof getCurren
 
 export function getSessionUserRole(session: Awaited<ReturnType<typeof getCurrentSession>>) {
   const appMetadata = session?.user?.app_metadata as Record<string, unknown> | undefined
-  const userMetadata = session?.user?.user_metadata as Record<string, unknown> | undefined
-  return String(appMetadata?.role || userMetadata?.role || '').trim()
+  return String(appMetadata?.role || '').trim()
 }
 
 export function onAuthStateChanged(callback: (isAuthenticated: boolean, userLabel?: string, userRole?: string) => void) {

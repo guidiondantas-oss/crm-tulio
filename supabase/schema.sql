@@ -174,6 +174,32 @@ as $$
   select coalesce(auth.jwt() -> 'app_metadata' ->> 'role', '') in ('admin', 'user');
 $$;
 
+create or replace function public.current_crm_owner_label()
+returns text
+language sql
+stable
+as $$
+  select trim(coalesce(
+    auth.jwt() -> 'user_metadata' ->> 'name',
+    auth.jwt() -> 'user_metadata' ->> 'full_name',
+    auth.jwt() ->> 'email',
+    ''
+  ));
+$$;
+
+create or replace function public.can_access_crm_lead(lead_owner text)
+returns boolean
+language sql
+stable
+as $$
+  select public.is_crm_admin()
+    or (
+      public.is_crm_user()
+      and nullif(trim(coalesce(lead_owner, '')), '') is not null
+      and lower(trim(lead_owner)) = lower(public.current_crm_owner_label())
+    );
+$$;
+
 drop policy if exists "Public CRM lead read" on public.leads;
 drop policy if exists "Public CRM lead insert" on public.leads;
 drop policy if exists "Public CRM lead update" on public.leads;
@@ -184,23 +210,26 @@ drop policy if exists "Public CRM settings write" on public.crm_settings;
 create policy "Public CRM lead read"
 on public.leads for select
 to authenticated
-using (public.is_crm_user());
+using (public.can_access_crm_lead(owner));
 
 create policy "Public CRM lead insert"
 on public.leads for insert
 to authenticated
-with check (public.is_crm_user());
+with check (public.can_access_crm_lead(owner));
 
 create policy "Public CRM lead update"
 on public.leads for update
 to authenticated
-using (public.is_crm_user())
-with check (public.is_crm_user());
+using (public.can_access_crm_lead(owner))
+with check (
+  public.is_crm_user()
+  and nullif(trim(coalesce(owner, '')), '') is not null
+);
 
 create policy "Public CRM lead delete"
 on public.leads for delete
 to authenticated
-using (public.is_crm_user());
+using (public.is_crm_admin());
 
 create policy "Public CRM settings read"
 on public.crm_settings for select

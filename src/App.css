@@ -322,6 +322,17 @@ button {
   background: var(--cream);
 }
 
+.btn-danger {
+  border: 1px solid var(--red);
+  background: var(--red);
+  color: var(--white);
+}
+
+.btn-danger:hover {
+  border-color: #a82f25;
+  background: #a82f25;
+}
+
 .btn-ghost {
   background: transparent;
   color: var(--text3);
@@ -713,6 +724,36 @@ button {
   color: var(--text);
   outline: none;
   width: 220px;
+}
+
+.owner-filter {
+  display: grid;
+  gap: 4px;
+}
+
+.owner-filter span {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+
+.owner-filter select {
+  min-width: 180px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--cream);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  outline: none;
+}
+
+.owner-filter select:focus {
+  border-color: var(--gold);
+  background: var(--white);
 }
 
 .filter-chips {
@@ -1157,6 +1198,28 @@ tbody td {
   color: var(--text);
   text-align: right;
   max-width: 60%;
+}
+
+.lead-details-editor {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.lead-details-editor .form-group:nth-child(-n + 2),
+.lead-details-actions {
+  grid-column: 1 / -1;
+}
+
+.lead-details-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.lead-details-actions .btn {
+  padding: 8px 12px;
 }
 
 .accent-value {
@@ -1638,6 +1701,12 @@ tbody td {
   width: fit-content;
 }
 
+.config-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .user-management-section {
   gap: 14px;
 }
@@ -1789,7 +1858,9 @@ tbody td {
   }
 
   .search-box,
-  .search-box input {
+  .search-box input,
+  .owner-filter,
+  .owner-filter select {
     width: 100%;
   }
 
@@ -1831,6 +1902,15 @@ tbody td {
     align-items: flex-start;
     gap: 12px;
     flex-direction: column;
+  }
+
+  .lead-details-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .lead-details-editor .form-group:nth-child(-n + 2),
+  .lead-details-actions {
+    grid-column: auto;
   }
 
   .topbar-actions,

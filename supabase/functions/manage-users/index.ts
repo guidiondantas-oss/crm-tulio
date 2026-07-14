@@ -31,7 +31,7 @@ function cleanString(value: unknown) {
 }
 
 function getUserRole(user: AuthUser | null | undefined) {
-  return String(user?.app_metadata?.role || user?.user_metadata?.role || '')
+  return String(user?.app_metadata?.role || '')
 }
 
 function getUserName(user: AuthUser) {

@@ -50,7 +50,7 @@ Deno.serve(async (request) => {
   })
 
   const { data: authData, error: authError } = await adminClient.auth.getUser(accessToken)
-  const callerRole = String(authData.user?.app_metadata?.role || authData.user?.user_metadata?.role || '')
+  const callerRole = String(authData.user?.app_metadata?.role || '')
 
   if (authError || !authData.user || callerRole !== 'admin') {
     return jsonResponse({ error: 'Acesso negado.' }, 403)
